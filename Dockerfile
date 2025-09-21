@@ -39,16 +39,14 @@ RUN apt-get update && \
     v4l-utils \
     zstd \
     ca-certificates \
+    dkms \
+    build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 
 # Copy Go binary from builder stage
 COPY --from=go-builder /app/video-device-plugin /usr/local/bin/video-device-plugin
-
-# Copy startup script
-COPY start.sh /usr/local/bin/start.sh
-RUN chmod +x /usr/local/bin/start.sh
 
 # Create necessary directories
 RUN mkdir -p /var/lib/kubelet/device-plugins
@@ -66,8 +64,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD ls /dev/video* | wc -l | grep -q 8 || exit 1
 
-# Use startup script as entrypoint
-ENTRYPOINT ["/usr/local/bin/start.sh"]
-
-# Default command
-CMD ["video-device-plugin"]
+# Set the Go binary as the entrypoint
+ENTRYPOINT ["/usr/local/bin/video-device-plugin"]

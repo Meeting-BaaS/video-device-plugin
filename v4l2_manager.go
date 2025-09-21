@@ -192,14 +192,23 @@ func (v *v4l2Manager) IsHealthy() bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	
-	if !v.healthy {
-		return false
+	// If we have devices in our map, check them
+	if len(v.devices) > 0 {
+		// Check if all devices still exist and are accessible
+		for _, device := range v.devices {
+			if !checkDeviceExists(device.Path) || !checkDeviceReadable(device.Path) {
+				v.logger.Warn("Device is not healthy", "device_id", device.ID)
+				return false
+			}
+		}
+		return true
 	}
 	
-	// Check if all devices still exist and are accessible
-	for _, device := range v.devices {
-		if !checkDeviceExists(device.Path) || !checkDeviceReadable(device.Path) {
-			v.logger.Warn("Device is not healthy", "device_id", device.ID)
+	// If no devices in our map, check if devices exist in the system
+	// This handles the case where devices are created by startup script
+	for i := 0; i < 8; i++ {
+		devicePath := fmt.Sprintf("/dev/video%d", i)
+		if !checkDeviceExists(devicePath) || !checkDeviceReadable(devicePath) {
 			return false
 		}
 	}
@@ -211,7 +220,22 @@ func (v *v4l2Manager) IsHealthy() bool {
 func (v *v4l2Manager) GetDeviceCount() int {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	return len(v.devices)
+	
+	// If we have devices in our map, return that count
+	if len(v.devices) > 0 {
+		return len(v.devices)
+	}
+	
+	// If no devices in our map, count devices in the system
+	// This handles the case where devices are created by startup script
+	count := 0
+	for i := 0; i < 8; i++ {
+		devicePath := fmt.Sprintf("/dev/video%d", i)
+		if checkDeviceExists(devicePath) {
+			count++
+		}
+	}
+	return count
 }
 
 // GetAllocatedDeviceCount returns the number of allocated devices

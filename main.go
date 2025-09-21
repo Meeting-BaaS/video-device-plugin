@@ -10,6 +10,9 @@ import (
 )
 
 func main() {
+	fmt.Println("🚀 Starting Video Device Plugin Container")
+	fmt.Println("==========================================")
+	
 	// Load configuration
 	config := loadConfig()
 	
@@ -21,11 +24,35 @@ func main() {
 	
 	// Initialize structured logging
 	logger := setupLogger(config.LogLevel)
-	logger.Info("Starting video device plugin", 
-		"max_devices", config.MaxDevices,
-		"node_name", config.NodeName,
-		"resource_name", config.ResourceName)
-
+	logger.Info("Starting Video Device Plugin initialization...")
+	
+	// Check if running as root
+	if err := checkRoot(); err != nil {
+		logger.Error("Root check failed", "error", err)
+		os.Exit(1)
+	}
+	
+	// Display system information
+	displaySystemInfo(logger)
+	
+	// Load v4l2loopback module
+	if err := loadV4L2LoopbackModule(logger); err != nil {
+		logger.Error("Failed to load v4l2loopback module", "error", err)
+		os.Exit(1)
+	}
+	
+	// Verify devices were created
+	if err := verifyVideoDevices(logger); err != nil {
+		logger.Error("Failed to verify video devices", "error", err)
+		os.Exit(1)
+	}
+	
+	// Set device permissions
+	if err := setDevicePermissions(logger); err != nil {
+		logger.Error("Failed to set device permissions", "error", err)
+		os.Exit(1)
+	}
+	
 	// Initialize V4L2 manager
 	v4l2Manager := NewV4L2Manager(logger)
 	
@@ -60,28 +87,24 @@ func main() {
 		logger.Error("Error during shutdown", "error", err)
 	}
 	
+	// Cleanup v4l2loopback module
+	cleanupV4L2Module(logger)
+	
 	logger.Info("Video device plugin shutdown complete")
 }
 
 // waitForDevicesReady waits for devices to be created and ready
 func waitForDevicesReady(v4l2Manager V4L2Manager, logger *slog.Logger) error {
-	logger.Info("Waiting for devices to be ready")
+	logger.Info("🎯 Starting video device plugin...")
 	
-	// Load v4l2loopback module
-	if err := v4l2Manager.LoadModule(); err != nil {
-		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
-	}
-	
-	// Create devices (this should be done by the startup script, but we'll verify)
-	// In a real implementation, the startup script would handle this
-	// For now, we'll assume devices are created by the startup script
-	
+	// Devices are already created by the main function, just verify they exist
 	// Wait for devices to be available
 	maxWait := 30 * time.Second
 	checkInterval := 1 * time.Second
 	start := time.Now()
 	
 	for time.Since(start) < maxWait {
+		// Check if devices are healthy and available
 		if v4l2Manager.IsHealthy() && v4l2Manager.GetDeviceCount() > 0 {
 			logger.Info("Devices are ready", 
 				"device_count", v4l2Manager.GetDeviceCount(),
@@ -95,6 +118,7 @@ func waitForDevicesReady(v4l2Manager V4L2Manager, logger *slog.Logger) error {
 	
 	return fmt.Errorf("devices not ready after %v", maxWait)
 }
+
 
 // setupGracefulShutdown sets up graceful shutdown handling
 func setupGracefulShutdown(plugin *VideoDevicePlugin, logger *slog.Logger) {
