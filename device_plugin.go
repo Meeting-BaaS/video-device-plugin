@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
@@ -117,19 +118,34 @@ func (p *VideoDevicePlugin) RegisterWithKubelet() error {
 		return nil
 	}
 
-	// This is a simplified registration - in a real implementation,
-	// you would need to implement the full kubelet registration protocol
 	p.logger.Info("Registering with kubelet", 
 		"resource_name", p.config.ResourceName,
 		"kubelet_socket", p.config.KubeletSocket)
 
-	// For now, we'll just mark as registered
-	// In a real implementation, you would:
-	// 1. Connect to kubelet socket
-	// 2. Send registration request
-	// 3. Handle registration response
-	p.registered = true
+	// Connect to kubelet socket (Unix domain socket)
+	conn, err := grpc.Dial("unix://"+p.config.KubeletSocket, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("failed to connect to kubelet: %w", err)
+	}
+	defer conn.Close()
 
+	// Create registration client
+	client := pluginapi.NewRegistrationClient(conn)
+
+	// Create registration request
+	req := &pluginapi.RegisterRequest{
+		Version:      "v1beta1",
+		Endpoint:     filepath.Base(p.config.SocketPath),
+		ResourceName: p.config.ResourceName,
+	}
+
+	// Send registration request
+	_, err = client.Register(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("failed to register with kubelet: %w", err)
+	}
+
+	p.registered = true
 	p.logger.Info("Successfully registered with kubelet")
 	return nil
 }

@@ -56,6 +56,12 @@ func main() {
 	// Initialize V4L2 manager
 	v4l2Manager := NewV4L2Manager(logger)
 	
+	// Populate the V4L2 manager with the devices we just created
+	if err := v4l2Manager.CreateDevices(8); err != nil {
+		logger.Error("Failed to populate V4L2 manager with devices", "error", err)
+		os.Exit(1)
+	}
+	
 	// Initialize device plugin
 	plugin := NewVideoDevicePlugin(config, v4l2Manager, logger)
 	
