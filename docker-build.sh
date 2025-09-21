@@ -25,7 +25,7 @@ fi
 # Configuration
 IMAGE_NAME="video-device-plugin"
 IMAGE_TAG="latest"
-FULL_IMAGE_NAME="${DOCKER_REGISTRY}/${DOCKER_USERNAME}/${IMAGE_NAME}:${IMAGE_TAG}"
+FULL_IMAGE_NAME="${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 echo "Building Docker image: $FULL_IMAGE_NAME"
 
