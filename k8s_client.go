@@ -84,8 +84,22 @@ func (k *K8sClient) performStartupReconciliation() {
 
 	// Find pods with our video device annotation and mark devices as allocated
 	allocatedDevices := 0
+	k.logger.Debug("Scanning pods for video device annotations",
+		"total_pods", len(pods.Items))
+	
 	for _, pod := range pods.Items {
+		k.logger.Debug("Checking pod for video device annotation",
+			"pod_name", pod.Name,
+			"pod_namespace", pod.Namespace,
+			"pod_phase", pod.Status.Phase,
+			"all_annotations", pod.Annotations)
+			
 		if deviceID, exists := pod.Annotations["meeting-baas.io/video-device-id"]; exists {
+			k.logger.Info("Found pod with video device annotation",
+				"pod_name", pod.Name,
+				"pod_namespace", pod.Namespace,
+				"device_id", deviceID)
+				
 			// Mark this device as allocated in our V4L2 manager
 			if err := k.devicePlugin.v4l2Manager.MarkDeviceAsAllocated(deviceID); err != nil {
 				k.logger.Error("Failed to mark device as allocated during startup reconciliation", 
@@ -118,18 +132,50 @@ func (k *K8sClient) startPodWatch() {
 		&v1.Pod{},
 		0, // No resync period
 		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				pod := obj.(*v1.Pod)
+				k.logger.Debug("Pod added event",
+					"pod_name", pod.Name,
+					"pod_namespace", pod.Namespace,
+					"pod_phase", pod.Status.Phase,
+					"has_video_annotation", func() bool {
+						_, exists := pod.Annotations["meeting-baas.io/video-device-id"]
+						return exists
+					}())
+			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				oldPod := oldObj.(*v1.Pod)
 				newPod := newObj.(*v1.Pod)
 				
+				k.logger.Debug("Pod update event",
+					"pod_name", newPod.Name,
+					"pod_namespace", newPod.Namespace,
+					"old_phase", oldPod.Status.Phase,
+					"new_phase", newPod.Status.Phase,
+					"has_video_annotation", func() bool {
+						_, exists := newPod.Annotations["meeting-baas.io/video-device-id"]
+						return exists
+					}())
+				
 				// Check if pod transitioned to Completed or Failed
 				if (oldPod.Status.Phase != v1.PodSucceeded && newPod.Status.Phase == v1.PodSucceeded) ||
 				   (oldPod.Status.Phase != v1.PodFailed && newPod.Status.Phase == v1.PodFailed) {
+					k.logger.Info("Pod phase transition detected",
+						"pod_name", newPod.Name,
+						"old_phase", oldPod.Status.Phase,
+						"new_phase", newPod.Status.Phase)
 					k.handlePodCompletion(newPod)
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				pod := obj.(*v1.Pod)
+				k.logger.Debug("Pod delete event",
+					"pod_name", pod.Name,
+					"pod_namespace", pod.Namespace,
+					"has_video_annotation", func() bool {
+						_, exists := pod.Annotations["meeting-baas.io/video-device-id"]
+						return exists
+					}())
 				k.handlePodDeletion(pod)
 			},
 		},
@@ -157,9 +203,19 @@ func (k *K8sClient) startPeriodicReconciliation() {
 
 // handlePodCompletion handles when a pod completes and releases its devices
 func (k *K8sClient) handlePodCompletion(pod *v1.Pod) {
+	k.logger.Debug("Pod completion event received",
+		"pod_name", pod.Name,
+		"pod_namespace", pod.Namespace,
+		"pod_phase", pod.Status.Phase,
+		"pod_uid", string(pod.UID),
+		"all_annotations", pod.Annotations)
+
 	// Check if pod has our video device annotation
 	deviceID, exists := pod.Annotations["meeting-baas.io/video-device-id"]
 	if !exists {
+		k.logger.Debug("Pod does not have video device annotation, ignoring",
+			"pod_name", pod.Name,
+			"available_annotations", pod.Annotations)
 		return // Not our pod, ignore
 	}
 
@@ -186,9 +242,18 @@ func (k *K8sClient) handlePodCompletion(pod *v1.Pod) {
 
 // handlePodDeletion handles when a pod is deleted and releases its devices
 func (k *K8sClient) handlePodDeletion(pod *v1.Pod) {
+	k.logger.Debug("Pod deletion event received",
+		"pod_name", pod.Name,
+		"pod_namespace", pod.Namespace,
+		"pod_uid", string(pod.UID),
+		"all_annotations", pod.Annotations)
+
 	// Check if pod has our video device annotation
 	deviceID, exists := pod.Annotations["meeting-baas.io/video-device-id"]
 	if !exists {
+		k.logger.Debug("Pod does not have video device annotation, ignoring deletion",
+			"pod_name", pod.Name,
+			"available_annotations", pod.Annotations)
 		return // Not our pod, ignore
 	}
 

@@ -202,11 +202,18 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 
 // Allocate implements the Allocate gRPC method
 func (p *VideoDevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
-	p.logger.Info("Allocate called", "requests", len(req.ContainerRequests))
+	p.logger.Info("Allocate called", 
+		"requests", len(req.ContainerRequests),
+		"request_details", req)
 
 	var responses []*pluginapi.ContainerAllocateResponse
 
-	for _, containerReq := range req.ContainerRequests {
+	for i, containerReq := range req.ContainerRequests {
+		p.logger.Info("Processing container request",
+			"container_index", i,
+			"device_ids", containerReq.DevicesIDs,
+			"request_details", containerReq)
+			
 		response, err := p.allocateContainer(containerReq)
 		if err != nil {
 			p.logger.Error("Failed to allocate container", "error", err)
@@ -215,9 +222,15 @@ func (p *VideoDevicePlugin) Allocate(ctx context.Context, req *pluginapi.Allocat
 		responses = append(responses, response)
 	}
 
-	return &pluginapi.AllocateResponse{
+	finalResponse := &pluginapi.AllocateResponse{
 		ContainerResponses: responses,
-	}, nil
+	}
+
+	p.logger.Info("Allocate response created",
+		"container_responses_count", len(finalResponse.ContainerResponses),
+		"response_details", finalResponse)
+
+	return finalResponse, nil
 }
 
 // GetDevicePluginOptions implements the GetDevicePluginOptions gRPC method
@@ -275,13 +288,13 @@ func (p *VideoDevicePlugin) sendDeviceList(stream pluginapi.DevicePlugin_ListAnd
 // allocateContainer allocates devices for a container
 func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRequest) (*pluginapi.ContainerAllocateResponse, error) {
 	// Get the number of devices requested
-	deviceCount := len(req.DevicesIds)
+	deviceCount := len(req.DevicesIDs)
 	
 	if deviceCount == 0 {
 		return &pluginapi.ContainerAllocateResponse{}, nil
 	}
 
-	p.logger.Info("Allocating devices for container", "device_count", deviceCount, "device_ids", req.DevicesIds)
+	p.logger.Info("Allocating devices for container", "device_count", deviceCount, "device_ids", req.DevicesIDs)
 
 	// Allocate the first available device (we only support 1 device per pod)
 	device, err := p.v4l2Manager.AllocateDevice()
@@ -315,11 +328,22 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path),
 		"annotation", fmt.Sprintf("meeting-baas.io/video-device-id=%s", device.ID))
 
-	return &pluginapi.ContainerAllocateResponse{
+	response := &pluginapi.ContainerAllocateResponse{
 		Devices:     devices,
 		Envs:        envVars,
 		Annotations: annotations,
-	}, nil
+	}
+
+	// Debug: Log the complete response structure
+	p.logger.Debug("ContainerAllocateResponse details",
+		"devices_count", len(response.Devices),
+		"envs_count", len(response.Envs),
+		"annotations_count", len(response.Annotations),
+		"devices", response.Devices,
+		"envs", response.Envs,
+		"annotations", response.Annotations)
+
+	return response, nil
 }
 
 // GetHealthStatus returns the health status of the device plugin
