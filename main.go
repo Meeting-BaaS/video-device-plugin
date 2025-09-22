@@ -41,6 +41,11 @@ func main() {
 			"socket_path", config.SocketPath)
 	}
 	
+	// Warn about v4l2loopback device limit
+	if config.MaxDevices == 8 {
+		logger.Info("Using maximum device count", "max_devices", config.MaxDevices, "note", "v4l2loopback supports maximum 8 devices")
+	}
+	
 	// Check if running as root
 	if err := checkRoot(); err != nil {
 		logger.Error("Root check failed", "error", err)

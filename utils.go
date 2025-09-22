@@ -49,7 +49,7 @@ func loadConfig() *DevicePluginConfig {
 
 	config := &DevicePluginConfig{
 		// Core Configuration
-		MaxDevices:      getEnvInt("MAX_DEVICES", 10),
+		MaxDevices:      getEnvInt("MAX_DEVICES", 8),
 		NodeName:        getEnv("NODE_NAME", ""),
 		KubeletSocket:   getEnv("KUBELET_SOCKET", "/var/lib/kubelet/device-plugins/kubelet.sock"),
 		ResourceName:    getEnv("RESOURCE_NAME", "meeting-baas.io/video-devices"),
@@ -77,6 +77,14 @@ func loadConfig() *DevicePluginConfig {
 		AllocationTimeout:     getEnvInt("ALLOCATION_TIMEOUT", 30),
 		DeviceCreationTimeout: getEnvInt("DEVICE_CREATION_TIMEOUT", 60),
 		ShutdownTimeout:       getEnvInt("SHUTDOWN_TIMEOUT", 10),
+	}
+
+	// Validate MaxDevices - v4l2loopback has a hard limit of 8 devices
+	if config.MaxDevices > 8 {
+		config.MaxDevices = 8
+	}
+	if config.MaxDevices < 1 {
+		config.MaxDevices = 1
 	}
 
 	return config
