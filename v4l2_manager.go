@@ -309,6 +309,28 @@ func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
 	}, nil
 }
 
+// MarkDeviceAsAllocated marks a device as allocated (used during startup reconciliation)
+func (v *v4l2Manager) MarkDeviceAsAllocated(deviceID string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	
+	device, exists := v.devices[deviceID]
+	if !exists {
+		return fmt.Errorf("device not found: %s", deviceID)
+	}
+	
+	if device.Allocated {
+		v.logger.Warn("Device already allocated", "device_id", deviceID)
+		return nil
+	}
+	
+	device.Allocated = true
+	device.AllocatedAt = time.Now()
+	
+	v.logger.Info("Marked device as allocated", "device_id", deviceID)
+	return nil
+}
+
 // ListAllDevices returns all devices (for debugging)
 func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 	v.mu.RLock()

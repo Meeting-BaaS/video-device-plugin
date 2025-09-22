@@ -59,6 +59,9 @@ type V4L2Manager interface {
 	// ReleaseDevice releases a device back to the pool
 	ReleaseDevice(deviceID string) error
 	
+	// MarkDeviceAsAllocated marks a device as allocated (used during startup reconciliation)
+	MarkDeviceAsAllocated(deviceID string) error
+	
 	// IsHealthy checks if the V4L2 system is healthy
 	IsHealthy() bool
 	

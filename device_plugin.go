@@ -288,13 +288,6 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate device: %w", err)
 	}
-	
-	// Track allocation in K8s client if available
-	if p.k8sClient != nil {
-		// Use device ID as a unique identifier for tracking
-		// The K8s client will match this with pod completion events
-		p.k8sClient.trackDeviceAllocation(device.ID, device.ID)
-	}
 
 	// Create environment variable
 	envVars := map[string]string{
@@ -310,15 +303,22 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		},
 	}
 
+	// Create annotations for kubelet to apply to the pod
+	annotations := map[string]string{
+		"meeting-baas.io/video-device-id": device.ID, // "video10", "video11", etc.
+	}
+
 	p.logger.Info("Allocated device", 
 		"device_id", device.ID,
 		"host_path", device.Path,
 		"container_path", device.Path,
-		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
+		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path),
+		"annotation", fmt.Sprintf("meeting-baas.io/video-device-id=%s", device.ID))
 
 	return &pluginapi.ContainerAllocateResponse{
-		Devices: devices,
-		Envs:    envVars,
+		Devices:     devices,
+		Envs:        envVars,
+		Annotations: annotations,
 	}, nil
 }
 

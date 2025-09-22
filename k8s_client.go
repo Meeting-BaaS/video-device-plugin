@@ -17,14 +17,13 @@ import (
 
 // K8sClient handles Kubernetes API interactions for device reconciliation
 type K8sClient struct {
-	clientset   *kubernetes.Clientset
-	logger      *slog.Logger
-	stopCh      chan struct{}
-	mu          sync.RWMutex
-	devicePlugin *VideoDevicePlugin
-	// Track which device is allocated to which pod
-	podToDevice  map[string]string // pod key -> device ID
-	deviceToPod  map[string]string // device ID -> pod key
+	clientset        *kubernetes.Clientset
+	logger           *slog.Logger
+	stopCh           chan struct{}
+	mu               sync.RWMutex
+	devicePlugin     *VideoDevicePlugin
+	// Track completed pods to avoid double device release
+	podsCompletedList map[string]bool // podUID -> true
 }
 
 // NewK8sClient creates a new Kubernetes client
@@ -35,12 +34,11 @@ func NewK8sClient(logger *slog.Logger, devicePlugin *VideoDevicePlugin) (*K8sCli
 	}
 
 	return &K8sClient{
-		clientset:    clientset,
-		logger:       logger,
-		stopCh:       make(chan struct{}),
-		devicePlugin: devicePlugin,
-		podToDevice:  make(map[string]string),
-		deviceToPod:  make(map[string]string),
+		clientset:         clientset,
+		logger:            logger,
+		stopCh:            make(chan struct{}),
+		devicePlugin:      devicePlugin,
+		podsCompletedList: make(map[string]bool),
 	}, nil
 }
 
@@ -75,7 +73,7 @@ func (k *K8sClient) Stop() {
 func (k *K8sClient) performStartupReconciliation() {
 	k.logger.Info("Performing startup reconciliation...")
 
-	// Query all pods with video-device resources
+	// Query all running pods
 	pods, err := k.clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
 		FieldSelector: "status.phase=Running",
 	})
@@ -84,21 +82,25 @@ func (k *K8sClient) performStartupReconciliation() {
 		return
 	}
 
-	// Track which devices should be allocated
-	expectedAllocations := make(map[string]bool)
-	
+	// Find pods with our video device annotation and mark devices as allocated
+	allocatedDevices := 0
 	for _, pod := range pods.Items {
-		if k.podRequestsVideoDevices(&pod) {
-			// This pod should have a video device allocated
-			// We'll mark it as expected to be allocated
-			podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-			expectedAllocations[podKey] = true
+		if deviceID, exists := pod.Annotations["meeting-baas.io/video-device-id"]; exists {
+			// Mark this device as allocated in our V4L2 manager
+			if err := k.devicePlugin.v4l2Manager.MarkDeviceAsAllocated(deviceID); err != nil {
+				k.logger.Error("Failed to mark device as allocated during startup reconciliation", 
+					"device_id", deviceID, "pod", pod.Name, "namespace", pod.Namespace, "error", err)
+			} else {
+				k.logger.Info("Marked device as allocated during startup reconciliation", 
+					"device_id", deviceID, "pod", pod.Name, "namespace", pod.Namespace)
+				allocatedDevices++
+			}
 		}
 	}
 
-	// Release any devices that are allocated but shouldn't be
-	// (This is a simplified approach - in practice, we'd need to track pod->device mapping)
-	k.logger.Info("Startup reconciliation completed", "expected_pods", len(expectedAllocations))
+	k.logger.Info("Startup reconciliation completed", 
+		"total_pods", len(pods.Items), 
+		"allocated_devices", allocatedDevices)
 }
 
 // startPodWatch starts watching for pod events
@@ -120,19 +122,15 @@ func (k *K8sClient) startPodWatch() {
 				oldPod := oldObj.(*v1.Pod)
 				newPod := newObj.(*v1.Pod)
 				
-				// Check if pod transitioned to Completed
-				if oldPod.Status.Phase != v1.PodSucceeded && 
-				   newPod.Status.Phase == v1.PodSucceeded {
-					if k.podRequestsVideoDevices(newPod) {
-						k.handlePodCompletion(newPod)
-					}
+				// Check if pod transitioned to Completed or Failed
+				if (oldPod.Status.Phase != v1.PodSucceeded && newPod.Status.Phase == v1.PodSucceeded) ||
+				   (oldPod.Status.Phase != v1.PodFailed && newPod.Status.Phase == v1.PodFailed) {
+					k.handlePodCompletion(newPod)
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				pod := obj.(*v1.Pod)
-				if k.podRequestsVideoDevices(pod) {
-					k.handlePodDeletion(pod)
-				}
+				k.handlePodDeletion(pod)
 			},
 		},
 	)
@@ -159,33 +157,66 @@ func (k *K8sClient) startPeriodicReconciliation() {
 
 // handlePodCompletion handles when a pod completes and releases its devices
 func (k *K8sClient) handlePodCompletion(pod *v1.Pod) {
-	podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-	
+	// Check if pod has our video device annotation
+	deviceID, exists := pod.Annotations["meeting-baas.io/video-device-id"]
+	if !exists {
+		return // Not our pod, ignore
+	}
+
 	k.logger.Info("Pod completed, releasing device", 
 		"pod_name", pod.Name,
 		"pod_namespace", pod.Namespace,
 		"pod_phase", pod.Status.Phase,
-		"pod_key", podKey)
+		"device_id", deviceID)
 
-	// For now, release all devices since we can't easily correlate pod->device
-	// In a production system, you'd want to implement proper pod->device tracking
-	// This is a simplified approach that works for the current use case
-	k.releaseAllAllocatedDevices()
+	// Release the specific device
+	if err := k.devicePlugin.v4l2Manager.ReleaseDevice(deviceID); err != nil {
+		k.logger.Error("Failed to release device for completed pod", 
+			"device_id", deviceID, "pod", pod.Name, "error", err)
+	} else {
+		k.logger.Info("Released device for completed pod", 
+			"device_id", deviceID, "pod", pod.Name)
+	}
+
+	// Add to completed list to avoid double release on deletion
+	k.mu.Lock()
+	k.podsCompletedList[string(pod.UID)] = true
+	k.mu.Unlock()
 }
 
 // handlePodDeletion handles when a pod is deleted and releases its devices
 func (k *K8sClient) handlePodDeletion(pod *v1.Pod) {
-	podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-	
-	k.logger.Info("Pod deleted, releasing device", 
+	// Check if pod has our video device annotation
+	deviceID, exists := pod.Annotations["meeting-baas.io/video-device-id"]
+	if !exists {
+		return // Not our pod, ignore
+	}
+
+	k.mu.Lock()
+	wasCompleted := k.podsCompletedList[string(pod.UID)]
+	if wasCompleted {
+		// Device already released during completion, just clean up
+		delete(k.podsCompletedList, string(pod.UID))
+		k.mu.Unlock()
+		k.logger.Info("Pod deleted (was completed), cleaned up tracking", 
+			"pod_name", pod.Name, "device_id", deviceID)
+		return
+	}
+	k.mu.Unlock()
+
+	// Pod was deleted without completing (crashed/force deleted), release device
+	k.logger.Info("Pod deleted (not completed), releasing device", 
 		"pod_name", pod.Name,
 		"pod_namespace", pod.Namespace,
-		"pod_key", podKey)
+		"device_id", deviceID)
 
-	// For now, release all devices since we can't easily correlate pod->device
-	// In a production system, you'd want to implement proper pod->device tracking
-	// This is a simplified approach that works for the current use case
-	k.releaseAllAllocatedDevices()
+	if err := k.devicePlugin.v4l2Manager.ReleaseDevice(deviceID); err != nil {
+		k.logger.Error("Failed to release device for deleted pod", 
+			"device_id", deviceID, "pod", pod.Name, "error", err)
+	} else {
+		k.logger.Info("Released device for deleted pod", 
+			"device_id", deviceID, "pod", pod.Name)
+	}
 }
 
 // podRequestsVideoDevices checks if a pod requests video devices
@@ -198,72 +229,6 @@ func (k *K8sClient) podRequestsVideoDevices(pod *v1.Pod) bool {
 		}
 	}
 	return false
-}
-
-// trackDeviceAllocation tracks that a device was allocated to a pod
-func (k *K8sClient) trackDeviceAllocation(podKey, deviceID string) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	
-	k.podToDevice[podKey] = deviceID
-	k.deviceToPod[deviceID] = podKey
-	
-	k.logger.Debug("Tracked device allocation", "pod_key", podKey, "device_id", deviceID)
-}
-
-// releaseDeviceForPod releases the specific device allocated to a pod
-func (k *K8sClient) releaseDeviceForPod(podKey string) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	
-	deviceID, exists := k.podToDevice[podKey]
-	if !exists {
-		k.logger.Warn("No device tracked for pod", "pod_key", podKey)
-		return
-	}
-	
-	// Release the device
-	if err := k.devicePlugin.v4l2Manager.ReleaseDevice(deviceID); err != nil {
-		k.logger.Error("Failed to release device", "device_id", deviceID, "pod_key", podKey, "error", err)
-	} else {
-		k.logger.Info("Released device for pod", "device_id", deviceID, "pod_key", podKey)
-	}
-	
-	// Clean up tracking
-	delete(k.podToDevice, podKey)
-	delete(k.deviceToPod, deviceID)
-}
-
-// releaseAllAllocatedDevices releases all currently allocated devices
-func (k *K8sClient) releaseAllAllocatedDevices() {
-	k.logger.Info("Releasing all allocated devices")
-	
-	// Get all devices and release only the allocated ones
-	devices := k.devicePlugin.v4l2Manager.ListAllDevices()
-	releasedCount := 0
-	for deviceID, device := range devices {
-		if device.Allocated {
-			if err := k.devicePlugin.v4l2Manager.ReleaseDevice(deviceID); err != nil {
-				k.logger.Error("Failed to release device", "device_id", deviceID, "error", err)
-			} else {
-				k.logger.Info("Released device", "device_id", deviceID)
-				releasedCount++
-			}
-		}
-	}
-	
-	k.logger.Info("Device release completed", "released_count", releasedCount)
-	
-	// Clear tracking
-	k.mu.Lock()
-	k.podToDevice = make(map[string]string)
-	k.deviceToPod = make(map[string]string)
-	k.mu.Unlock()
-}
-
-// releaseAllDevices releases all allocated devices (fallback for cleanup)
-func (k *K8sClient) releaseAllDevices() {
-	k.releaseAllAllocatedDevices()
 }
 
 // createK8sClient creates a Kubernetes client using in-cluster config
