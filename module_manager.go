@@ -38,11 +38,13 @@ func loadV4L2LoopbackModule(logger *slog.Logger) error {
 	}
 	
 	// Load the v4l2loopback module with our specific parameters
+	// Using video_nr=10 to avoid conflicts with system video devices (video0-9)
 	cmd := exec.Command("modprobe", "v4l2loopback",
 		"devices=8",
+		"video_nr=10",
 		"max_buffers=2",
 		"exclusive_caps=1",
-		`card_label="MeetingBot_WebCam"`)
+		`card_label="Default WebCam"`)
 	
 	if err := cmd.Run(); err != nil {
 		logger.Error("❌ Failed to load v4l2loopback module")

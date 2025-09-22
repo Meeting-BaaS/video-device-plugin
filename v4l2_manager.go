@@ -65,10 +65,11 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 	// Clear existing devices
 	v.devices = make(map[string]*VideoDevice)
 	
-	// Create devices from /dev/video0 to /dev/video{count-1}
+	// Create devices from /dev/video10 to /dev/video{10+count-1}
+	// Starting from video10 to avoid conflicts with system video devices
 	for i := 0; i < count; i++ {
-		deviceID := fmt.Sprintf("video%d", i)
-		devicePath := fmt.Sprintf("/dev/video%d", i)
+		deviceID := fmt.Sprintf("video%d", 10+i)
+		devicePath := fmt.Sprintf("/dev/video%d", 10+i)
 		
 		// Check if device exists
 		if !checkDeviceExists(devicePath) {

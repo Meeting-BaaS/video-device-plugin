@@ -11,7 +11,7 @@ func verifyVideoDevices(logger *slog.Logger) error {
 	logger.Info("🔍 Verifying video devices...")
 	
 	deviceCount := 0
-	for i := 0; i < 8; i++ {
+	for i := 10; i < 18; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
 			deviceCount++
@@ -19,7 +19,7 @@ func verifyVideoDevices(logger *slog.Logger) error {
 				logger.Info(fmt.Sprintf("   %s %s %s %s %s %s", 
 					stat.Mode().String(),
 					"1", "root", "video", 
-					fmt.Sprintf("%d, %d", 81, i),
+					fmt.Sprintf("%d, %d", 81, i-10),
 					stat.ModTime().Format("Jan 02 15:04"),
 					devicePath))
 			}
@@ -38,7 +38,7 @@ func verifyVideoDevices(logger *slog.Logger) error {
 func setDevicePermissions(logger *slog.Logger) error {
 	logger.Info("🔐 Setting device permissions...")
 	
-	for i := 0; i < 8; i++ {
+	for i := 10; i < 18; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
 			// Set permissions to 666 (rw-rw-rw-)
