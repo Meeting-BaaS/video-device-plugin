@@ -13,13 +13,13 @@ func checkRoot() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("this container must run as root to access kernel modules")
 	}
-	fmt.Println("✅ Running as root")
+	fmt.Println("Running as root")
 	return nil
 }
 
 // displaySystemInfo displays system information
 func displaySystemInfo(logger *slog.Logger) {
-	logger.Info("📊 System Information:")
+	logger.Info("System Information:")
 	
 	// Get kernel version
 	if kernelInfo, err := exec.Command("uname", "-r").Output(); err == nil {

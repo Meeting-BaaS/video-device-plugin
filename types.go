@@ -14,12 +14,35 @@ type VideoDevice struct {
 
 // DevicePluginConfig holds configuration for the device plugin
 type DevicePluginConfig struct {
+	// Core Configuration
 	MaxDevices      int    `json:"max_devices"`       // Maximum number of video devices
 	NodeName        string `json:"node_name"`         // Kubernetes node name
 	KubeletSocket   string `json:"kubelet_socket"`    // Path to kubelet socket
 	ResourceName    string `json:"resource_name"`     // Resource name for device plugin
 	SocketPath      string `json:"socket_path"`       // Path to device plugin socket
 	LogLevel        string `json:"log_level"`         // Log level (debug, info, warn, error)
+	
+	// Development/Debugging
+	Debug           bool   `json:"debug"`             // Enable debug mode
+	
+	// V4L2 Configuration
+	V4L2MaxBuffers    int    `json:"v4l2_max_buffers"`     // Number of buffers for v4l2loopback
+	V4L2ExclusiveCaps int    `json:"v4l2_exclusive_caps"`  // Enable exclusive capabilities
+	V4L2CardLabel     string `json:"v4l2_card_label"`      // Card label for devices
+	
+	// Kubernetes Integration
+	KubernetesNamespace   string `json:"kubernetes_namespace"`    // Namespace for deployment
+	ServiceAccountName    string `json:"service_account_name"`    // Service account name
+	
+	// Monitoring and Observability
+	EnableMetrics         bool   `json:"enable_metrics"`          // Enable Prometheus metrics
+	MetricsPort           int    `json:"metrics_port"`            // Metrics port
+	HealthCheckInterval   int    `json:"health_check_interval"`   // Health check interval in seconds
+	
+	// Performance Tuning
+	AllocationTimeout      int `json:"allocation_timeout"`       // Device allocation timeout in seconds
+	DeviceCreationTimeout  int `json:"device_creation_timeout"`  // Device creation timeout in seconds
+	ShutdownTimeout        int `json:"shutdown_timeout"`         // Graceful shutdown timeout in seconds
 }
 
 // V4L2Manager interface for managing V4L2 devices
@@ -47,6 +70,9 @@ type V4L2Manager interface {
 	
 	// GetAllocatedDeviceCount returns the number of allocated devices
 	GetAllocatedDeviceCount() int
+	
+	// ListAllDevices returns all devices (for debugging and reconciliation)
+	ListAllDevices() map[string]*VideoDevice
 }
 
 // DevicePluginServer interface for the gRPC device plugin server

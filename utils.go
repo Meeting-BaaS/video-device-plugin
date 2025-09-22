@@ -48,12 +48,35 @@ func loadConfig() *DevicePluginConfig {
 	}
 
 	config := &DevicePluginConfig{
-		MaxDevices:      getEnvInt("MAX_DEVICES", 8),
+		// Core Configuration
+		MaxDevices:      getEnvInt("MAX_DEVICES", 10),
 		NodeName:        getEnv("NODE_NAME", ""),
 		KubeletSocket:   getEnv("KUBELET_SOCKET", "/var/lib/kubelet/device-plugins/kubelet.sock"),
 		ResourceName:    getEnv("RESOURCE_NAME", "meeting-baas.io/video-devices"),
 		SocketPath:      getEnv("SOCKET_PATH", "/var/lib/kubelet/device-plugins/video-device-plugin.sock"),
 		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		
+		// Development/Debugging
+		Debug:           getEnvBool("DEBUG", false),
+		
+		// V4L2 Configuration
+		V4L2MaxBuffers:    getEnvInt("V4L2_MAX_BUFFERS", 2),
+		V4L2ExclusiveCaps: getEnvInt("V4L2_EXCLUSIVE_CAPS", 1),
+		V4L2CardLabel:     getEnv("V4L2_CARD_LABEL", "Default WebCam"),
+		
+		// Kubernetes Integration
+		KubernetesNamespace: getEnv("KUBERNETES_NAMESPACE", "kube-system"),
+		ServiceAccountName:  getEnv("SERVICE_ACCOUNT_NAME", "video-device-plugin"),
+		
+		// Monitoring and Observability
+		EnableMetrics:       getEnvBool("ENABLE_METRICS", false),
+		MetricsPort:         getEnvInt("METRICS_PORT", 8080),
+		HealthCheckInterval: getEnvInt("HEALTH_CHECK_INTERVAL", 30),
+		
+		// Performance Tuning
+		AllocationTimeout:     getEnvInt("ALLOCATION_TIMEOUT", 30),
+		DeviceCreationTimeout: getEnvInt("DEVICE_CREATION_TIMEOUT", 60),
+		ShutdownTimeout:       getEnvInt("SHUTDOWN_TIMEOUT", 10),
 	}
 
 	return config
@@ -108,6 +131,16 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+// getEnvBool gets an environment variable as a boolean with a default value
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
 		}
 	}
 	return defaultValue

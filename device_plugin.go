@@ -24,17 +24,28 @@ type VideoDevicePlugin struct {
 	stopCh      chan struct{}
 	mu          sync.RWMutex
 	registered  bool
+	k8sClient   *K8sClient
 }
 
 // NewVideoDevicePlugin creates a new VideoDevicePlugin instance
 func NewVideoDevicePlugin(config *DevicePluginConfig, v4l2Manager V4L2Manager, logger *slog.Logger) *VideoDevicePlugin {
-	return &VideoDevicePlugin{
+	plugin := &VideoDevicePlugin{
 		config:      config,
 		v4l2Manager: v4l2Manager,
 		logger:      logger,
 		stopCh:      make(chan struct{}),
 		registered:  false,
 	}
+
+	// Initialize Kubernetes client
+	k8sClient, err := NewK8sClient(logger, plugin)
+	if err != nil {
+		logger.Warn("Failed to create Kubernetes client, pod monitoring will be disabled", "error", err)
+	} else {
+		plugin.k8sClient = k8sClient
+	}
+
+	return plugin
 }
 
 // Start starts the device plugin server
@@ -79,6 +90,12 @@ func (p *VideoDevicePlugin) Start() error {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
 
+	// Start pod monitoring for device release
+	if p.k8sClient != nil {
+		if err := p.k8sClient.Start(); err != nil {
+			p.logger.Warn("Failed to start Kubernetes client monitoring", "error", err)
+		}
+	}
 
 	p.logger.Info("Video device plugin started successfully")
 	return nil
@@ -90,6 +107,11 @@ func (p *VideoDevicePlugin) Stop() error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Stop Kubernetes client monitoring
+	if p.k8sClient != nil {
+		p.k8sClient.Stop()
+	}
 
 	if p.server != nil {
 		p.server.Stop()
@@ -267,24 +289,25 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		return nil, fmt.Errorf("failed to allocate device: %w", err)
 	}
 
-	// Create environment variable
+	// Create environment variable - always use /dev/video10 for Chrome compatibility
 	envVars := map[string]string{
-		"VIDEO_DEVICE": device.Path,
+		"VIDEO_DEVICE": "/dev/video10",
 	}
 
-	// Create device specification
+	// Create device specification - mount actual device to /dev/video10 in container
 	devices := []*pluginapi.DeviceSpec{
 		{
-			ContainerPath: device.Path,
-			HostPath:      device.Path,
+			ContainerPath: "/dev/video10",  // Always mount to /dev/video10 in container
+			HostPath:      device.Path,     // Actual device on host (video10, video11, etc.)
 			Permissions:   "rw",
 		},
 	}
 
 	p.logger.Info("Allocated device", 
 		"device_id", device.ID,
-		"device_path", device.Path,
-		"env_var", "VIDEO_DEVICE="+device.Path)
+		"host_path", device.Path,
+		"container_path", "/dev/video10",
+		"env_var", "VIDEO_DEVICE=/dev/video10")
 
 	return &pluginapi.ContainerAllocateResponse{
 		Devices: devices,
@@ -332,4 +355,3 @@ func (p *VideoDevicePlugin) GetDeviceStatus() *DeviceStatus {
 		LastUpdated:      time.Now(),
 	}
 }
-

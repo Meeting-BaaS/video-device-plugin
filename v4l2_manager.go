@@ -83,6 +83,13 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 			continue
 		}
 		
+		// Set 666 permissions on the device to ensure it's accessible
+		if err := exec.Command("chmod", "666", devicePath).Run(); err != nil {
+			v.logger.Warn("Failed to set permissions", "device", devicePath, "error", err)
+		} else {
+			v.logger.Debug("Set permissions", "device", devicePath, "permissions", "666")
+		}
+		
 		// Create device entry
 		device := &VideoDevice{
 			ID:        deviceID,

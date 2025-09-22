@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🚀 Starting Video Device Plugin Container")
+	fmt.Println("Starting Video Device Plugin Container")
 	fmt.Println("==========================================")
 	
 	// Load configuration
@@ -26,6 +26,21 @@ func main() {
 	logger := setupLogger(config.LogLevel)
 	logger.Info("Starting Video Device Plugin initialization...")
 	
+	// Debug: Show loaded configuration
+	if config.Debug {
+		logger.Info("Configuration loaded", 
+			"max_devices", config.MaxDevices,
+			"node_name", config.NodeName,
+			"log_level", config.LogLevel,
+			"debug", config.Debug,
+			"v4l2_card_label", config.V4L2CardLabel,
+			"v4l2_max_buffers", config.V4L2MaxBuffers,
+			"v4l2_exclusive_caps", config.V4L2ExclusiveCaps,
+			"resource_name", config.ResourceName,
+			"kubelet_socket", config.KubeletSocket,
+			"socket_path", config.SocketPath)
+	}
+	
 	// Check if running as root
 	if err := checkRoot(); err != nil {
 		logger.Error("Root check failed", "error", err)
@@ -36,19 +51,19 @@ func main() {
 	displaySystemInfo(logger)
 	
 	// Load v4l2loopback module
-	if err := loadV4L2LoopbackModule(logger); err != nil {
+	if err := loadV4L2LoopbackModule(config, logger); err != nil {
 		logger.Error("Failed to load v4l2loopback module", "error", err)
 		os.Exit(1)
 	}
 	
 	// Verify devices were created
-	if err := verifyVideoDevices(logger); err != nil {
+	if err := verifyVideoDevices(config, logger); err != nil {
 		logger.Error("Failed to verify video devices", "error", err)
 		os.Exit(1)
 	}
 	
 	// Set device permissions
-	if err := setDevicePermissions(logger); err != nil {
+	if err := setDevicePermissions(config, logger); err != nil {
 		logger.Error("Failed to set device permissions", "error", err)
 		os.Exit(1)
 	}
@@ -57,7 +72,7 @@ func main() {
 	v4l2Manager := NewV4L2Manager(logger)
 	
 	// Populate the V4L2 manager with the devices we just created
-	if err := v4l2Manager.CreateDevices(8); err != nil {
+	if err := v4l2Manager.CreateDevices(config.MaxDevices); err != nil {
 		logger.Error("Failed to populate V4L2 manager with devices", "error", err)
 		os.Exit(1)
 	}
@@ -101,7 +116,7 @@ func main() {
 
 // waitForDevicesReady waits for devices to be created and ready
 func waitForDevicesReady(v4l2Manager V4L2Manager, logger *slog.Logger) error {
-	logger.Info("🎯 Starting video device plugin...")
+	logger.Info("Starting video device plugin...")
 	
 	// Devices are already created by the main function, just verify they exist
 	// Wait for devices to be available

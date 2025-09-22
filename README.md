@@ -66,7 +66,7 @@ video-device-plugin/
 ### 5. V4L2 Device Management
 
 - **Module Loading**: Check and load v4l2loopback kernel module
-- **Device Creation**: Create /dev/videoX devices (0-7 by default)
+- **Device Creation**: Create /dev/videoX devices (10-19 by default)
 - **Device Allocation**: Track device usage and prevent conflicts
 - **Health Monitoring**: Monitor device health and availability
 
@@ -103,7 +103,7 @@ video-device-plugin/
 
 ### Environment Variables
 
-- **MAX_DEVICES**: Maximum number of video devices per node (default: 8)
+- **MAX_DEVICES**: Maximum number of video devices per node (default: 10)
 - **NODE_NAME**: Kubernetes node name for device plugin registration
 - **KUBELET_SOCKET**: Path to kubelet device plugin socket
 

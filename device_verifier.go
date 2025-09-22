@@ -7,11 +7,11 @@ import (
 )
 
 // verifyVideoDevices verifies that video devices were created
-func verifyVideoDevices(logger *slog.Logger) error {
-	logger.Info("🔍 Verifying video devices...")
+func verifyVideoDevices(config *DevicePluginConfig, logger *slog.Logger) error {
+	logger.Info("Verifying video devices...")
 	
 	deviceCount := 0
-	for i := 10; i < 18; i++ {
+	for i := 10; i < 10+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
 			deviceCount++
@@ -30,15 +30,15 @@ func verifyVideoDevices(logger *slog.Logger) error {
 		return fmt.Errorf("no video devices found")
 	}
 	
-	logger.Info(fmt.Sprintf("✅ Found %d video devices:", deviceCount))
+	logger.Info(fmt.Sprintf("Found %d video devices:", deviceCount))
 	return nil
 }
 
 // setDevicePermissions sets proper permissions on video devices
-func setDevicePermissions(logger *slog.Logger) error {
-	logger.Info("🔐 Setting device permissions...")
+func setDevicePermissions(config *DevicePluginConfig, logger *slog.Logger) error {
+	logger.Info("Setting device permissions...")
 	
-	for i := 10; i < 18; i++ {
+	for i := 10; i < 10+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
 			// Set permissions to 666 (rw-rw-rw-)
@@ -48,6 +48,6 @@ func setDevicePermissions(logger *slog.Logger) error {
 		}
 	}
 	
-	logger.Info("✅ Device permissions set")
+	logger.Info("Device permissions set")
 	return nil
 }
