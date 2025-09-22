@@ -47,9 +47,6 @@ type DevicePluginConfig struct {
 
 // V4L2Manager interface for managing V4L2 devices
 type V4L2Manager interface {
-	// LoadModule loads the v4l2loopback kernel module
-	LoadModule() error
-	
 	// CreateDevices creates the specified number of video devices
 	CreateDevices(count int) error
 	

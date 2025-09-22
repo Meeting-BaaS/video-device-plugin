@@ -26,35 +26,6 @@ func NewV4L2Manager(logger *slog.Logger) V4L2Manager {
 	}
 }
 
-// LoadModule loads the v4l2loopback kernel module
-func (v *v4l2Manager) LoadModule() error {
-	v.logger.Info("Loading v4l2loopback kernel module")
-	
-	// Check if module is already loaded
-	if v.isModuleLoaded() {
-		v.logger.Info("v4l2loopback module already loaded")
-		return nil
-	}
-	
-	// Load the module with our specific parameters
-	cmd := exec.Command("modprobe", "v4l2loopback", 
-		"devices=8", 
-		"max_buffers=2", 
-		"exclusive_caps=1", 
-		`card_label="MeetingBot_WebCam"`)
-	
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		v.logger.Error("Failed to load v4l2loopback module", 
-			"error", err, 
-			"output", string(output))
-		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
-	}
-	
-	v.logger.Info("Successfully loaded v4l2loopback module", "output", string(output))
-	return nil
-}
-
 // CreateDevices creates the specified number of video devices
 func (v *v4l2Manager) CreateDevices(count int) error {
 	v.logger.Info("Creating video devices", "count", count)
@@ -65,11 +36,11 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 	// Clear existing devices
 	v.devices = make(map[string]*VideoDevice)
 	
-	// Create devices from /dev/video10 to /dev/video{10+count-1}
-	// Starting from video10 to avoid conflicts with system video devices
+	// Create devices from /dev/video{VideoDeviceStartNumber} to /dev/video{VideoDeviceStartNumber+count-1}
+	// Starting from video{VideoDeviceStartNumber} to avoid conflicts with system video devices
 	for i := 0; i < count; i++ {
-		deviceID := fmt.Sprintf("video%d", 10+i)
-		devicePath := fmt.Sprintf("/dev/video%d", 10+i)
+		deviceID := fmt.Sprintf("video%d", VideoDeviceStartNumber+i)
+		devicePath := fmt.Sprintf("/dev/video%d", VideoDeviceStartNumber+i)
 		
 		// Check if device exists
 		if !checkDeviceExists(devicePath) {

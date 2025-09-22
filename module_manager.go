@@ -38,18 +38,20 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 	}
 	
 	// Load the v4l2loopback module with our specific parameters
-	// Using video_nr=10-{10+max_devices-1} to avoid conflicts with system video devices (video0-9)
+	// Using video_nr=VideoDeviceStartNumber-{VideoDeviceStartNumber+max_devices-1} to avoid conflicts with system video devices
 	videoNumbers := make([]string, config.MaxDevices)
 	cardLabels := make([]string, config.MaxDevices)
+	exclusiveCaps := make([]string, config.MaxDevices)
 	for i := 0; i < config.MaxDevices; i++ {
-		videoNumbers[i] = fmt.Sprintf("%d", 10+i)
+		videoNumbers[i] = fmt.Sprintf("%d", VideoDeviceStartNumber+i)
 		cardLabels[i] = fmt.Sprintf(`"%s"`, config.V4L2CardLabel)
+		exclusiveCaps[i] = fmt.Sprintf("%d", config.V4L2ExclusiveCaps)
 	}
 	
 	cmd := exec.Command("modprobe", "v4l2loopback",
 		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
 		fmt.Sprintf("max_buffers=%d", config.V4L2MaxBuffers),
-		fmt.Sprintf("exclusive_caps=%d", config.V4L2ExclusiveCaps),
+		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
 		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
 	
 	if err := cmd.Run(); err != nil {

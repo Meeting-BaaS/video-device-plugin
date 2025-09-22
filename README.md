@@ -66,7 +66,7 @@ video-device-plugin/
 ### 5. V4L2 Device Management
 
 - **Module Loading**: Check and load v4l2loopback kernel module
-- **Device Creation**: Create /dev/videoX devices (10-17 by default, max 8 devices)
+- **Device Creation**: Create /dev/videoX devices (starting from video10 by default, max 8 devices)
 - **Device Allocation**: Track device usage and prevent conflicts
 - **Health Monitoring**: Monitor device health and availability
 

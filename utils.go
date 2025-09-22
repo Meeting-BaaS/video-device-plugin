@@ -15,6 +15,13 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Constants for video device management
+const (
+	// VideoDeviceStartNumber is the first video device number to use
+	// Starting from 10 to avoid conflicts with system video devices (video0-9)
+	VideoDeviceStartNumber = 10
+)
+
 // setupLogger creates and configures a structured logger
 func setupLogger(level string) *slog.Logger {
 	var logLevel slog.Level

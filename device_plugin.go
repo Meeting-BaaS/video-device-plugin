@@ -296,16 +296,16 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		p.k8sClient.trackDeviceAllocation(device.ID, device.ID)
 	}
 
-	// Create environment variable - always use /dev/video10 for Chrome compatibility
+	// Create environment variable
 	envVars := map[string]string{
-		"VIDEO_DEVICE": "/dev/video10",
+		"VIDEO_DEVICE": device.Path,
 	}
 
-	// Create device specification - mount actual device to /dev/video10 in container
+	// Create device specification - mount actual device to same path in container
 	devices := []*pluginapi.DeviceSpec{
 		{
-			ContainerPath: "/dev/video10",  // Always mount to /dev/video10 in container
-			HostPath:      device.Path,     // Actual device on host (video10, video11, etc.)
+			ContainerPath: device.Path,  // Mount to same path as host (video{VideoDeviceStartNumber}, etc.)
+			HostPath:      device.Path,  // Actual device on host (video{VideoDeviceStartNumber}, etc.)
 			Permissions:   "rw",
 		},
 	}
@@ -313,8 +313,8 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 	p.logger.Info("Allocated device", 
 		"device_id", device.ID,
 		"host_path", device.Path,
-		"container_path", "/dev/video10",
-		"env_var", "VIDEO_DEVICE=/dev/video10")
+		"container_path", device.Path,
+		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
 
 	return &pluginapi.ContainerAllocateResponse{
 		Devices: devices,

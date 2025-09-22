@@ -11,7 +11,7 @@ func verifyVideoDevices(config *DevicePluginConfig, logger *slog.Logger) error {
 	logger.Info("Verifying video devices...")
 	
 	deviceCount := 0
-	for i := 10; i < 10+config.MaxDevices; i++ {
+	for i := VideoDeviceStartNumber; i < VideoDeviceStartNumber+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
 			deviceCount++
@@ -19,7 +19,7 @@ func verifyVideoDevices(config *DevicePluginConfig, logger *slog.Logger) error {
 				logger.Info(fmt.Sprintf("   %s %s %s %s %s %s", 
 					stat.Mode().String(),
 					"1", "root", "video", 
-					fmt.Sprintf("%d, %d", 81, i-10),
+					fmt.Sprintf("%d, %d", 81, i-VideoDeviceStartNumber),
 					stat.ModTime().Format("Jan 02 15:04"),
 					devicePath))
 			}
@@ -38,7 +38,7 @@ func verifyVideoDevices(config *DevicePluginConfig, logger *slog.Logger) error {
 func setDevicePermissions(config *DevicePluginConfig, logger *slog.Logger) error {
 	logger.Info("Setting device permissions...")
 	
-	for i := 10; i < 10+config.MaxDevices; i++ {
+	for i := VideoDeviceStartNumber; i < VideoDeviceStartNumber+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
 			// Set permissions to 666 (rw-rw-rw-)
