@@ -87,7 +87,6 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 			ID:        deviceID,
 			Path:      devicePath,
 			Allocated: false,
-			PodID:     "",
 		}
 		
 		v.devices[deviceID] = device
@@ -129,11 +128,7 @@ func (v *v4l2Manager) GetAvailableDevices() []*VideoDevice {
 }
 
 // AllocateDevice allocates a device to a pod
-func (v *v4l2Manager) AllocateDevice(podID string) (*VideoDevice, error) {
-	if podID == "" {
-		return nil, fmt.Errorf("pod ID cannot be empty")
-	}
-	
+func (v *v4l2Manager) AllocateDevice() (*VideoDevice, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	
@@ -141,13 +136,11 @@ func (v *v4l2Manager) AllocateDevice(podID string) (*VideoDevice, error) {
 	for _, device := range v.devices {
 		if !device.Allocated {
 			device.Allocated = true
-			device.PodID = podID
 			device.AllocatedAt = time.Now()
 			
 			v.logger.Info("Device allocated", 
 				"device_id", device.ID,
-				"device_path", device.Path,
-				"pod_id", podID)
+				"device_path", device.Path)
 			
 			return device, nil
 		}
@@ -175,14 +168,11 @@ func (v *v4l2Manager) ReleaseDevice(deviceID string) error {
 		return nil
 	}
 	
-	podID := device.PodID
 	device.Allocated = false
-	device.PodID = ""
 	device.AllocatedAt = time.Time{}
 	
 	v.logger.Info("Device released", 
-		"device_id", deviceID,
-		"pod_id", podID)
+		"device_id", deviceID)
 	
 	return nil
 }
@@ -278,7 +268,6 @@ func (v *v4l2Manager) GetDeviceStatus() *DeviceStatus {
 			ID:          device.ID,
 			Path:        device.Path,
 			Allocated:   device.Allocated,
-			PodID:       device.PodID,
 			AllocatedAt: device.AllocatedAt,
 		}
 		devices = append(devices, deviceCopy)
@@ -337,62 +326,8 @@ func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
 		ID:          device.ID,
 		Path:        device.Path,
 		Allocated:   device.Allocated,
-		PodID:       device.PodID,
 		AllocatedAt: device.AllocatedAt,
 	}, nil
-}
-
-// GetDevicesByPodID returns all devices allocated to a specific pod
-func (v *v4l2Manager) GetDevicesByPodID(podID string) []*VideoDevice {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	
-	var podDevices []*VideoDevice
-	for _, device := range v.devices {
-		if device.Allocated && device.PodID == podID {
-			// Return a copy to avoid race conditions
-			podDevices = append(podDevices, &VideoDevice{
-				ID:          device.ID,
-				Path:        device.Path,
-				Allocated:   device.Allocated,
-				PodID:       device.PodID,
-				AllocatedAt: device.AllocatedAt,
-			})
-		}
-	}
-	
-	return podDevices
-}
-
-// ReleaseDevicesByPodID releases all devices allocated to a specific pod
-func (v *v4l2Manager) ReleaseDevicesByPodID(podID string) error {
-	if podID == "" {
-		return fmt.Errorf("pod ID cannot be empty")
-	}
-	
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	
-	var releasedDevices []string
-	for deviceID, device := range v.devices {
-		if device.Allocated && device.PodID == podID {
-			device.Allocated = false
-			device.PodID = ""
-			device.AllocatedAt = time.Time{}
-			releasedDevices = append(releasedDevices, deviceID)
-		}
-	}
-	
-	if len(releasedDevices) > 0 {
-		v.logger.Info("Released devices for pod", 
-			"pod_id", podID,
-			"device_count", len(releasedDevices),
-			"devices", releasedDevices)
-	} else {
-		v.logger.Debug("No devices found for pod", "pod_id", podID)
-	}
-	
-	return nil
 }
 
 // ListAllDevices returns all devices (for debugging)
@@ -406,7 +341,6 @@ func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 			ID:          device.ID,
 			Path:        device.Path,
 			Allocated:   device.Allocated,
-			PodID:       device.PodID,
 			AllocatedAt: device.AllocatedAt,
 		}
 	}

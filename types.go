@@ -9,7 +9,6 @@ type VideoDevice struct {
 	ID          string    `json:"id"`          // Device ID (e.g., "video0")
 	Path        string    `json:"path"`        // Device path (e.g., "/dev/video0")
 	Allocated   bool      `json:"allocated"`   // Whether device is currently allocated
-	PodID       string    `json:"pod_id"`      // Pod ID that has allocated this device
 	AllocatedAt time.Time `json:"allocated_at"` // When device was allocated
 }
 
@@ -34,14 +33,11 @@ type V4L2Manager interface {
 	// GetAvailableDevices returns a list of unallocated devices
 	GetAvailableDevices() []*VideoDevice
 	
-	// AllocateDevice allocates a device to a pod
-	AllocateDevice(podID string) (*VideoDevice, error)
+	// AllocateDevice allocates a device and returns it
+	AllocateDevice() (*VideoDevice, error)
 	
 	// ReleaseDevice releases a device back to the pool
 	ReleaseDevice(deviceID string) error
-	
-	// ReleaseDevicesByPodID releases all devices allocated to a specific pod
-	ReleaseDevicesByPodID(podID string) error
 	
 	// IsHealthy checks if the V4L2 system is healthy
 	IsHealthy() bool
@@ -70,7 +66,6 @@ type DevicePluginServer interface {
 
 // DeviceAllocationRequest represents a request to allocate a device
 type DeviceAllocationRequest struct {
-	PodID      string `json:"pod_id"`
 	DeviceType string `json:"device_type"` // Always "video" for our use case
 }
 

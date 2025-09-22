@@ -218,19 +218,12 @@ func generateDeviceID(devicePath string) string {
 
 // isDeviceAllocated checks if a device is currently allocated
 func isDeviceAllocated(device *VideoDevice) bool {
-	return device != nil && device.Allocated && device.PodID != ""
+	return device != nil && device.Allocated
 }
 
 // getDevicePathFromID generates a device path from a device ID
 func getDevicePathFromID(deviceID string) string {
 	return filepath.Join("/dev", deviceID)
-}
-
-// sanitizePodID sanitizes a pod ID for logging
-func sanitizePodID(podID string) string {
-	// Remove any potentially sensitive information
-	// In practice, pod IDs are usually safe, but this is a good practice
-	return strings.TrimSpace(podID)
 }
 
 // createEnvVar creates an environment variable string
