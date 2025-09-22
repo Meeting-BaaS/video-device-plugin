@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -24,7 +25,7 @@ type VideoDevicePlugin struct {
 	stopCh      chan struct{}
 	mu          sync.RWMutex
 	registered  bool
-	k8sClient   *K8sClient
+	updateCh    chan struct{} // Channel to trigger ListAndWatch updates
 }
 
 // NewVideoDevicePlugin creates a new VideoDevicePlugin instance
@@ -35,15 +36,9 @@ func NewVideoDevicePlugin(config *DevicePluginConfig, v4l2Manager V4L2Manager, l
 		logger:      logger,
 		stopCh:      make(chan struct{}),
 		registered:  false,
+		updateCh:    make(chan struct{}, 1), // Buffered channel for immediate updates
 	}
 
-	// Initialize Kubernetes client
-	k8sClient, err := NewK8sClient(logger, plugin)
-	if err != nil {
-		logger.Warn("Failed to create Kubernetes client, pod monitoring will be disabled", "error", err)
-	} else {
-		plugin.k8sClient = k8sClient
-	}
 
 	return plugin
 }
@@ -90,12 +85,9 @@ func (p *VideoDevicePlugin) Start() error {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
 
-	// Start pod monitoring for device release
-	if p.k8sClient != nil {
-		if err := p.k8sClient.Start(); err != nil {
-			p.logger.Warn("Failed to start Kubernetes client monitoring", "error", err)
-		}
-	}
+	// Start kubelet restart monitoring
+	go p.monitorKubeletRestart()
+
 
 	p.logger.Info("Video device plugin started successfully")
 	return nil
@@ -108,10 +100,6 @@ func (p *VideoDevicePlugin) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Stop Kubernetes client monitoring
-	if p.k8sClient != nil {
-		p.k8sClient.Stop()
-	}
 
 	if p.server != nil {
 		p.server.Stop()
@@ -175,7 +163,7 @@ func (p *VideoDevicePlugin) RegisterWithKubelet() error {
 
 // ListAndWatch implements the ListAndWatch gRPC method
 func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	p.logger.Info("ListAndWatch called")
+	p.logger.Debug("ListAndWatch called")
 
 	// Send initial device list
 	if err := p.sendDeviceList(stream); err != nil {
@@ -189,9 +177,16 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 	for {
 		select {
 		case <-p.stopCh:
-			p.logger.Info("ListAndWatch stopping")
+			p.logger.Debug("ListAndWatch stopping")
 			return nil
+		case <-p.updateCh:
+			// Immediate update triggered by device allocation
+			if err := p.sendDeviceList(stream); err != nil {
+				p.logger.Error("Failed to send device list update", "error", err)
+				return err
+			}
 		case <-ticker.C:
+			// Periodic health check
 			if err := p.sendDeviceList(stream); err != nil {
 				p.logger.Error("Failed to send device list", "error", err)
 				return err
@@ -202,17 +197,14 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 
 // Allocate implements the Allocate gRPC method
 func (p *VideoDevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
-	p.logger.Info("Allocate called", 
-		"requests", len(req.ContainerRequests),
-		"request_details", req)
+	p.logger.Info("Allocate called", "requests", len(req.ContainerRequests))
 
 	var responses []*pluginapi.ContainerAllocateResponse
 
 	for i, containerReq := range req.ContainerRequests {
-		p.logger.Info("Processing container request",
+		p.logger.Debug("Processing container request",
 			"container_index", i,
-			"device_ids", containerReq.DevicesIDs,
-			"request_details", containerReq)
+			"device_ids", containerReq.DevicesIDs)
 			
 		response, err := p.allocateContainer(containerReq)
 		if err != nil {
@@ -226,9 +218,8 @@ func (p *VideoDevicePlugin) Allocate(ctx context.Context, req *pluginapi.Allocat
 		ContainerResponses: responses,
 	}
 
-	p.logger.Info("Allocate response created",
-		"container_responses_count", len(finalResponse.ContainerResponses),
-		"response_details", finalResponse)
+	p.logger.Debug("Allocate response created",
+		"container_responses_count", len(finalResponse.ContainerResponses))
 
 	return finalResponse, nil
 }
@@ -267,14 +258,17 @@ func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginap
 
 // sendDeviceList sends the current device list to the client
 func (p *VideoDevicePlugin) sendDeviceList(stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	availableDevices := p.v4l2Manager.GetAvailableDevices()
+	allDevices := p.v4l2Manager.ListAllDevices()
 	
 	var devices []*pluginapi.Device
-	for _, device := range availableDevices {
-		devices = append(devices, &pluginapi.Device{
-			ID:     device.ID,
-			Health: pluginapi.Healthy,
-		})
+	for _, device := range allDevices {
+		// Only send unallocated devices to kubelet
+		if !device.Allocated {
+			devices = append(devices, &pluginapi.Device{
+				ID:     device.ID,
+				Health: pluginapi.Healthy,
+			})
+		}
 	}
 
 	response := &pluginapi.ListAndWatchResponse{
@@ -296,10 +290,22 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 
 	p.logger.Info("Allocating devices for container", "device_count", deviceCount, "device_ids", req.DevicesIDs)
 
-	// Allocate the first available device (we only support 1 device per pod)
-	device, err := p.v4l2Manager.AllocateDevice()
+	// Kubelet tells us which device to allocate
+	deviceID := req.DevicesIDs[0] // Kubelet tells us which specific device to allocate
+	
+	// Allocate the specific device requested by kubelet
+	// Kubernetes ensures the device is available before requesting it
+	device, err := p.v4l2Manager.AllocateDevice(deviceID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to allocate device: %w", err)
+		return nil, fmt.Errorf("failed to allocate device %s: %w", deviceID, err)
+	}
+
+	// Trigger immediate ListAndWatch update to notify kubelet that device is no longer available
+	select {
+	case p.updateCh <- struct{}{}:
+		p.logger.Debug("Triggered immediate ListAndWatch update")
+	default:
+		p.logger.Debug("ListAndWatch update channel full, will update on next tick")
 	}
 
 	// Create environment variable
@@ -316,32 +322,17 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		},
 	}
 
-	// Create annotations for kubelet to apply to the pod
-	annotations := map[string]string{
-		"meeting-baas.io/video-device-id": device.ID, // "video10", "video11", etc.
-	}
-
 	p.logger.Info("Allocated device", 
 		"device_id", device.ID,
 		"host_path", device.Path,
 		"container_path", device.Path,
-		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path),
-		"annotation", fmt.Sprintf("meeting-baas.io/video-device-id=%s", device.ID))
+		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
 
 	response := &pluginapi.ContainerAllocateResponse{
-		Devices:     devices,
-		Envs:        envVars,
-		Annotations: annotations,
+		Devices: devices,
+		Envs:    envVars,
+		// No annotations needed - Kubernetes handles device allocation
 	}
-
-	// Debug: Log the complete response structure
-	p.logger.Debug("ContainerAllocateResponse details",
-		"devices_count", len(response.Devices),
-		"envs_count", len(response.Envs),
-		"annotations_count", len(response.Annotations),
-		"devices", response.Devices,
-		"envs", response.Envs,
-		"annotations", response.Annotations)
 
 	return response, nil
 }
@@ -362,27 +353,61 @@ func (p *VideoDevicePlugin) GetHealthStatus() *HealthCheck {
 	}
 
 	return &HealthCheck{
-		Healthy:         healthy,
-		V4L2Healthy:     v4l2Healthy,
-		DevicesReady:    devicesReady,
-		KubeletConnected: p.registered,
-		LastChecked:     time.Now(),
-		Errors:          errors,
+		Healthy:      healthy,
+		V4L2Healthy:  v4l2Healthy,
+		DevicesReady: devicesReady,
+		LastChecked:  time.Now(),
+		Errors:       errors,
 	}
 }
 
-// GetDeviceStatus returns the current device status
-func (p *VideoDevicePlugin) GetDeviceStatus() *DeviceStatus {
-	if manager, ok := p.v4l2Manager.(*v4l2Manager); ok {
-		return manager.GetDeviceStatus()
-	}
-	
-	// Fallback if v4l2Manager doesn't implement GetDeviceStatus
-	return &DeviceStatus{
-		TotalDevices:     p.v4l2Manager.GetDeviceCount(),
-		AvailableDevices: len(p.v4l2Manager.GetAvailableDevices()),
-		AllocatedDevices: p.v4l2Manager.GetAllocatedDeviceCount(),
-		Devices:          p.v4l2Manager.GetAvailableDevices(),
-		LastUpdated:      time.Now(),
+// monitorKubeletRestart monitors for kubelet restarts and re-registers when needed
+func (p *VideoDevicePlugin) monitorKubeletRestart() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+			// Check if kubelet socket still exists
+			if !fileExists(p.config.KubeletSocket) {
+				p.logger.Warn("Kubelet socket not found, kubelet may have restarted")
+				
+				// Wait for kubelet to come back up
+				for {
+					select {
+					case <-p.stopCh:
+						return
+					case <-time.After(5 * time.Second):
+						if fileExists(p.config.KubeletSocket) {
+							p.logger.Info("Kubelet socket found, attempting re-registration")
+							
+							// Reset registration status
+							p.mu.Lock()
+							p.registered = false
+							p.mu.Unlock()
+							
+							// Re-register with kubelet
+							if err := p.RegisterWithKubelet(); err != nil {
+								p.logger.Error("Failed to re-register with kubelet", "error", err)
+								continue
+							}
+							
+							p.logger.Info("Successfully re-registered with kubelet after restart")
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 }
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
+}
+

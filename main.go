@@ -130,11 +130,10 @@ func waitForDevicesReady(v4l2Manager V4L2Manager, logger *slog.Logger) error {
 	start := time.Now()
 	
 	for time.Since(start) < maxWait {
-		// Check if devices are healthy and available
+		// Check if devices are healthy
 		if v4l2Manager.IsHealthy() && v4l2Manager.GetDeviceCount() > 0 {
 			logger.Info("Devices are ready", 
-				"device_count", v4l2Manager.GetDeviceCount(),
-				"available_devices", len(v4l2Manager.GetAvailableDevices()))
+				"device_count", v4l2Manager.GetDeviceCount())
 			return nil
 		}
 		

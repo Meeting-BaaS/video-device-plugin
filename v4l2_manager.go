@@ -91,70 +91,29 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 	return nil
 }
 
-// GetAvailableDevices returns a list of unallocated devices
-func (v *v4l2Manager) GetAvailableDevices() []*VideoDevice {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	
-	var available []*VideoDevice
-	for _, device := range v.devices {
-		if !device.Allocated {
-			available = append(available, device)
-		}
-	}
-	
-	return available
-}
 
 // AllocateDevice allocates a device to a pod
-func (v *v4l2Manager) AllocateDevice() (*VideoDevice, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	
-	// Find first available device
-	for _, device := range v.devices {
-		if !device.Allocated {
-			device.Allocated = true
-			device.AllocatedAt = time.Now()
-			
-			v.logger.Info("Device allocated", 
-				"device_id", device.ID,
-				"device_path", device.Path)
-			
-			return device, nil
-		}
-	}
-	
-	return nil, fmt.Errorf("no available devices")
-}
-
-// ReleaseDevice releases a device back to the pool
-func (v *v4l2Manager) ReleaseDevice(deviceID string) error {
-	if deviceID == "" {
-		return fmt.Errorf("device ID cannot be empty")
-	}
-	
+func (v *v4l2Manager) AllocateDevice(deviceID string) (*VideoDevice, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	
 	device, exists := v.devices[deviceID]
 	if !exists {
-		return fmt.Errorf("device not found: %s", deviceID)
+		return nil, fmt.Errorf("device not found: %s", deviceID)
 	}
 	
-	if !device.Allocated {
-		v.logger.Warn("Device is not allocated", "device_id", deviceID)
-		return nil
-	}
+	// Kubernetes ensures the device is available before requesting it
+	device.Allocated = true
+	device.AllocatedAt = time.Now()
 	
-	device.Allocated = false
-	device.AllocatedAt = time.Time{}
+	v.logger.Info("Device allocated", 
+		"device_id", device.ID,
+		"device_path", device.Path)
 	
-	v.logger.Info("Device released", 
-		"device_id", deviceID)
-	
-	return nil
+	return device, nil
 }
+
+
 
 // IsHealthy checks if the V4L2 system is healthy
 func (v *v4l2Manager) IsHealthy() bool {
@@ -207,19 +166,6 @@ func (v *v4l2Manager) GetDeviceCount() int {
 	return count
 }
 
-// GetAllocatedDeviceCount returns the number of allocated devices
-func (v *v4l2Manager) GetAllocatedDeviceCount() int {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	
-	count := 0
-	for _, device := range v.devices {
-		if device.Allocated {
-			count++
-		}
-	}
-	return count
-}
 
 // isModuleLoaded checks if the v4l2loopback module is loaded
 func (v *v4l2Manager) isModuleLoaded() bool {
@@ -233,103 +179,7 @@ func (v *v4l2Manager) isModuleLoaded() bool {
 	return strings.Contains(string(output), "v4l2loopback")
 }
 
-// GetDeviceStatus returns the current status of all devices
-func (v *v4l2Manager) GetDeviceStatus() *DeviceStatus {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	
-	devices := make([]*VideoDevice, 0, len(v.devices))
-	allocatedCount := 0
-	
-	for _, device := range v.devices {
-		// Create a copy to avoid race conditions
-		deviceCopy := &VideoDevice{
-			ID:          device.ID,
-			Path:        device.Path,
-			Allocated:   device.Allocated,
-			AllocatedAt: device.AllocatedAt,
-		}
-		devices = append(devices, deviceCopy)
-		
-		if device.Allocated {
-			allocatedCount++
-		}
-	}
-	
-	return &DeviceStatus{
-		TotalDevices:     len(v.devices),
-		AvailableDevices: len(v.devices) - allocatedCount,
-		AllocatedDevices: allocatedCount,
-		Devices:          devices,
-		LastUpdated:      time.Now(),
-	}
-}
 
-// ValidateDevices validates that all devices are working correctly
-func (v *v4l2Manager) ValidateDevices() error {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	
-	var errors []string
-	
-	for _, device := range v.devices {
-		if !checkDeviceExists(device.Path) {
-			errors = append(errors, fmt.Sprintf("device %s does not exist", device.Path))
-			continue
-		}
-		
-		if !checkDeviceReadable(device.Path) {
-			errors = append(errors, fmt.Sprintf("device %s is not readable", device.Path))
-		}
-	}
-	
-	if len(errors) > 0 {
-		return fmt.Errorf("device validation failed: %s", strings.Join(errors, "; "))
-	}
-	
-	return nil
-}
-
-// GetDeviceByID returns a device by its ID
-func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	
-	device, exists := v.devices[deviceID]
-	if !exists {
-		return nil, fmt.Errorf("device not found: %s", deviceID)
-	}
-	
-	// Return a copy to avoid race conditions
-	return &VideoDevice{
-		ID:          device.ID,
-		Path:        device.Path,
-		Allocated:   device.Allocated,
-		AllocatedAt: device.AllocatedAt,
-	}, nil
-}
-
-// MarkDeviceAsAllocated marks a device as allocated (used during startup reconciliation)
-func (v *v4l2Manager) MarkDeviceAsAllocated(deviceID string) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	
-	device, exists := v.devices[deviceID]
-	if !exists {
-		return fmt.Errorf("device not found: %s", deviceID)
-	}
-	
-	if device.Allocated {
-		v.logger.Warn("Device already allocated", "device_id", deviceID)
-		return nil
-	}
-	
-	device.Allocated = true
-	device.AllocatedAt = time.Now()
-	
-	v.logger.Info("Marked device as allocated", "device_id", deviceID)
-	return nil
-}
 
 // ListAllDevices returns all devices (for debugging)
 func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {

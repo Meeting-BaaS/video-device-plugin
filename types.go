@@ -50,17 +50,8 @@ type V4L2Manager interface {
 	// CreateDevices creates the specified number of video devices
 	CreateDevices(count int) error
 	
-	// GetAvailableDevices returns a list of unallocated devices
-	GetAvailableDevices() []*VideoDevice
-	
-	// AllocateDevice allocates a device and returns it
-	AllocateDevice() (*VideoDevice, error)
-	
-	// ReleaseDevice releases a device back to the pool
-	ReleaseDevice(deviceID string) error
-	
-	// MarkDeviceAsAllocated marks a device as allocated (used during startup reconciliation)
-	MarkDeviceAsAllocated(deviceID string) error
+	// AllocateDevice allocates a specific device requested by kubelet
+	AllocateDevice(deviceID string) (*VideoDevice, error)
 	
 	// IsHealthy checks if the V4L2 system is healthy
 	IsHealthy() bool
@@ -68,10 +59,7 @@ type V4L2Manager interface {
 	// GetDeviceCount returns the total number of devices
 	GetDeviceCount() int
 	
-	// GetAllocatedDeviceCount returns the number of allocated devices
-	GetAllocatedDeviceCount() int
-	
-	// ListAllDevices returns all devices (for debugging and reconciliation)
+	// ListAllDevices returns all devices (for debugging)
 	ListAllDevices() map[string]*VideoDevice
 }
 
@@ -90,43 +78,11 @@ type DevicePluginServer interface {
 	RegisterWithKubelet() error
 }
 
-// DeviceAllocationRequest represents a request to allocate a device
-type DeviceAllocationRequest struct {
-	DeviceType string `json:"device_type"` // Always "video" for our use case
-}
-
-// DeviceAllocationResponse represents the response to a device allocation request
-type DeviceAllocationResponse struct {
-	Device     *VideoDevice `json:"device"`
-	Success    bool         `json:"success"`
-	Error      string       `json:"error,omitempty"`
-	EnvVars    []string     `json:"env_vars"` // Environment variables to set
-	Mounts     []string     `json:"mounts"`   // Device mounts for the pod
-}
-
-// DeviceStatus represents the current status of all devices
-type DeviceStatus struct {
-	TotalDevices      int            `json:"total_devices"`
-	AvailableDevices  int            `json:"available_devices"`
-	AllocatedDevices  int            `json:"allocated_devices"`
-	Devices           []*VideoDevice `json:"devices"`
-	LastUpdated       time.Time      `json:"last_updated"`
-}
-
-// LogEntry represents a structured log entry
-type LogEntry struct {
-	Level     string                 `json:"level"`
-	Message   string                 `json:"message"`
-	Timestamp time.Time              `json:"timestamp"`
-	Fields    map[string]interface{} `json:"fields,omitempty"`
-}
-
 // HealthCheck represents the health status of the device plugin
 type HealthCheck struct {
 	Healthy       bool          `json:"healthy"`
 	V4L2Healthy   bool          `json:"v4l2_healthy"`
 	DevicesReady  bool          `json:"devices_ready"`
-	KubeletConnected bool       `json:"kubelet_connected"`
 	LastChecked   time.Time     `json:"last_checked"`
 	Errors        []string      `json:"errors,omitempty"`
 }

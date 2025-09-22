@@ -14,6 +14,16 @@ Running video applications in Kubernetes containers is challenging because:
 
 This plugin solves these problems by providing a **Kubernetes-native way to manage virtual video devices** with proper resource allocation, conflict prevention, and automatic scaling.
 
+## ✨ Key Benefits
+
+- **🎯 Kubernetes-Native**: Follows official device plugin best practices
+- **🔧 Simple & Reliable**: No complex tracking or reconciliation needed
+- **⚡ High Performance**: Minimal overhead with thread-safe operations
+- **🛡️ Production Ready**: Handles edge cases and provides comprehensive logging
+- **📈 Scalable**: Works seamlessly with Kubernetes autoscaling
+- **🔄 Robust**: Auto-recovery from kubelet restarts and real-time state updates
+- **🔍 Observable**: Structured logging and health monitoring
+
 ## 🏗️ Architecture Overview
 
 ### Core Components
@@ -42,12 +52,14 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 
 ```text
 1. Pod requests meeting-baas.io/video-devices: 1
-2. Kubelet queries device plugin for available devices
-3. Device plugin allocates first available device (e.g., video10)
-4. Device plugin returns device info + annotation to kubelet
-5. Kubelet applies annotation to pod
-6. Pod starts with VIDEO_DEVICE=/dev/video10
-7. Pod completes → Device plugin releases device via annotation
+2. Kubelet queries device plugin for available devices via ListAndWatch
+3. Kubelet chooses which device to allocate (e.g., video10)
+4. Kubelet calls device plugin with specific device ID
+5. Device plugin validates and allocates the requested device
+6. Device plugin triggers immediate ListAndWatch update (device no longer available)
+7. Device plugin returns device info (env vars, mounts) to kubelet
+8. Pod starts with VIDEO_DEVICE=/dev/video10
+9. Kubernetes handles device lifecycle management
 ```
 
 ## 🔧 Key Concepts
@@ -61,23 +73,21 @@ The plugin implements the **Kubernetes Device Plugin API** with these key method
 - **`GetDevicePluginOptions`**: Returns plugin configuration
 - **`PreStartContainer`**: Optional pre-start container logic
 
-### 2. Annotation-Based Device Tracking
+### 2. Kubernetes-Native Device Management
 
-Instead of complex pod-to-device mapping, we use **Kubernetes annotations**:
+The plugin follows **Kubernetes best practices** for device management:
 
-```yaml
-# Pod gets annotated automatically by kubelet
-metadata:
-  annotations:
-    meeting-baas.io/video-device-id: "video10"
-```
+- **Kubelet manages allocation**: Kubelet chooses which device to allocate
+- **Device plugin validates**: Simple validation that device is available
+- **No complex tracking**: Kubernetes handles device lifecycle
+- **Thread-safe allocation**: Mutex-protected device state management
 
 **Benefits**:
 
-- No pod identification needed during allocation
-- Kubelet handles annotation application
+- Follows official Kubernetes device plugin patterns
+- No complex pod-to-device mapping needed
 - No additional RBAC permissions required
-- Simple and reliable device tracking
+- Reliable and maintainable
 
 ### 3. V4L2 Device Management
 
@@ -91,29 +101,30 @@ metadata:
 **Device Lifecycle**:
 
 ```text
-Create → Allocate → Use → Release → Available
-   ↓         ↓        ↓       ↓         ↓
-Startup   Pod Req   Pod Run  Pod End   Ready
+Create → Available → Allocate → Use → Available
+   ↓         ↓           ↓        ↓        ↓
+Startup   Ready      Pod Req   Pod Run   Ready
 ```
 
-### 4. Pod Completion Detection
+### 4. Simple Device Validation
 
-**Watch API Strategy**:
+**Allocation Process**:
 
-- **Pod Completion**: Watch for phase changes to `Succeeded`/`Failed`
-- **Pod Deletion**: Watch for pod deletion events
-- **Startup Recovery**: Query all running pods with annotations on restart
+- **Kubelet Request**: Kubelet specifies which device to allocate
+- **Validation**: Check if device exists (Kubernetes ensures availability)
+- **Allocation**: Mark device as allocated and return device info
+- **No Cleanup Needed**: Kubernetes handles device lifecycle
 
-**Release Logic**:
+**Allocation Logic**:
 
 ```go
-if pod.Annotations["meeting-baas.io/video-device-id"] {
-    if pod.phase == "Succeeded" || pod.phase == "Failed" {
-        releaseDevice(deviceID)
-        addToCompletedList(pod.UID)
-    } else if pod.deleted && !inCompletedList(pod.UID) {
-        releaseDevice(deviceID) // Pod crashed/deleted
+func AllocateDevice(deviceID string) (*VideoDevice, error) {
+    if !deviceExists(deviceID) {
+        return nil, fmt.Errorf("device not found: %s", deviceID)
     }
+    // Kubernetes ensures the device is available before requesting it
+    device.Allocated = true
+    return device, nil
 }
 ```
 
@@ -123,19 +134,20 @@ if pod.Annotations["meeting-baas.io/video-device-id"] {
 
 - **8 Virtual Devices per Node**: Configurable device count (max 8)
 - **Automatic Device Creation**: v4l2loopback module loading and device setup
-- **Resource Allocation**: One device per pod with conflict prevention
-- **Automatic Scaling**: Works with Kubernetes autoscaling
+- **Kubernetes-Native Allocation**: Follows official device plugin patterns
+- **Simple Validation**: Basic device availability checking
+- **Thread-Safe Operations**: Mutex-protected device state management
 - **Health Monitoring**: Continuous device availability checking
-- **Graceful Shutdown**: Proper cleanup on pod termination
 
 ### Advanced Features
 
-- **Annotation-Based Tracking**: Simple and reliable device management
-- **Startup Recovery**: Rebuilds device state from Kubernetes API
 - **Structured Logging**: JSON-formatted logs with configurable levels
 - **Configuration Management**: Environment variable based configuration
 - **Error Handling**: Comprehensive error handling and recovery
-- **Thread Safety**: Mutex-protected device operations
+- **Graceful Shutdown**: Proper cleanup on pod termination
+- **Kubelet Restart Recovery**: Automatically detects and re-registers after kubelet restarts
+- **Real-time Updates**: Immediate ListAndWatch updates on device state changes
+- **No Complex Tracking**: Leverages Kubernetes' built-in device management
 
 ## 📋 Prerequisites
 
@@ -306,9 +318,6 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -323,6 +332,8 @@ subjects:
   name: video-device-plugin
   namespace: kube-system
 ```
+
+**Note**: No pod permissions needed - Kubernetes handles device lifecycle management.
 
 ### 3. Using the Plugin
 
@@ -391,6 +402,7 @@ kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | jq
 | No video devices | v4l2loopback not loaded | Check kernel module loading in logs |
 | Permission denied | Missing privileged mode | Ensure `privileged: true` in DaemonSet |
 | Device allocation fails | All devices busy | Check device utilization and scaling |
+| Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
 
 ### Logging
 
@@ -403,8 +415,8 @@ The plugin uses structured JSON logging:
   "msg": "Device allocated",
   "device_id": "video10",
   "device_path": "/dev/video10",
-  "pod": "video-app-123",
-  "node_name": "worker-node-1"
+  "container_path": "/dev/video10",
+  "env_var": "VIDEO_DEVICE=/dev/video10"
 }
 ```
 
