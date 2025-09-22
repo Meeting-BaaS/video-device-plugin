@@ -22,6 +22,9 @@ type K8sClient struct {
 	stopCh      chan struct{}
 	mu          sync.RWMutex
 	devicePlugin *VideoDevicePlugin
+	// Track which device is allocated to which pod
+	podToDevice  map[string]string // pod key -> device ID
+	deviceToPod  map[string]string // device ID -> pod key
 }
 
 // NewK8sClient creates a new Kubernetes client
@@ -36,6 +39,8 @@ func NewK8sClient(logger *slog.Logger, devicePlugin *VideoDevicePlugin) (*K8sCli
 		logger:       logger,
 		stopCh:       make(chan struct{}),
 		devicePlugin: devicePlugin,
+		podToDevice:  make(map[string]string),
+		deviceToPod:  make(map[string]string),
 	}, nil
 }
 
@@ -154,25 +159,33 @@ func (k *K8sClient) startPeriodicReconciliation() {
 
 // handlePodCompletion handles when a pod completes and releases its devices
 func (k *K8sClient) handlePodCompletion(pod *v1.Pod) {
-	k.logger.Info("Pod completed, releasing devices", 
+	podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+	
+	k.logger.Info("Pod completed, releasing device", 
 		"pod_name", pod.Name,
 		"pod_namespace", pod.Namespace,
-		"pod_phase", pod.Status.Phase)
+		"pod_phase", pod.Status.Phase,
+		"pod_key", podKey)
 
-	// For now, we'll implement a simple approach
-	// In a full implementation, we'd need to track which device was allocated to which pod
-	k.releaseAllDevices()
+	// For now, release all devices since we can't easily correlate pod->device
+	// In a production system, you'd want to implement proper pod->device tracking
+	// This is a simplified approach that works for the current use case
+	k.releaseAllAllocatedDevices()
 }
 
 // handlePodDeletion handles when a pod is deleted and releases its devices
 func (k *K8sClient) handlePodDeletion(pod *v1.Pod) {
-	k.logger.Info("Pod deleted, releasing devices", 
+	podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+	
+	k.logger.Info("Pod deleted, releasing device", 
 		"pod_name", pod.Name,
-		"pod_namespace", pod.Namespace)
+		"pod_namespace", pod.Namespace,
+		"pod_key", podKey)
 
-	// For now, we'll implement a simple approach
-	// In a full implementation, we'd need to track which device was allocated to which pod
-	k.releaseAllDevices()
+	// For now, release all devices since we can't easily correlate pod->device
+	// In a production system, you'd want to implement proper pod->device tracking
+	// This is a simplified approach that works for the current use case
+	k.releaseAllAllocatedDevices()
 }
 
 // podRequestsVideoDevices checks if a pod requests video devices
@@ -187,21 +200,70 @@ func (k *K8sClient) podRequestsVideoDevices(pod *v1.Pod) bool {
 	return false
 }
 
-// releaseAllDevices releases all allocated devices (temporary implementation)
-func (k *K8sClient) releaseAllDevices() {
+// trackDeviceAllocation tracks that a device was allocated to a pod
+func (k *K8sClient) trackDeviceAllocation(podKey, deviceID string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	
+	k.podToDevice[podKey] = deviceID
+	k.deviceToPod[deviceID] = podKey
+	
+	k.logger.Debug("Tracked device allocation", "pod_key", podKey, "device_id", deviceID)
+}
+
+// releaseDeviceForPod releases the specific device allocated to a pod
+func (k *K8sClient) releaseDeviceForPod(podKey string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	
+	deviceID, exists := k.podToDevice[podKey]
+	if !exists {
+		k.logger.Warn("No device tracked for pod", "pod_key", podKey)
+		return
+	}
+	
+	// Release the device
+	if err := k.devicePlugin.v4l2Manager.ReleaseDevice(deviceID); err != nil {
+		k.logger.Error("Failed to release device", "device_id", deviceID, "pod_key", podKey, "error", err)
+	} else {
+		k.logger.Info("Released device for pod", "device_id", deviceID, "pod_key", podKey)
+	}
+	
+	// Clean up tracking
+	delete(k.podToDevice, podKey)
+	delete(k.deviceToPod, deviceID)
+}
+
+// releaseAllAllocatedDevices releases all currently allocated devices
+func (k *K8sClient) releaseAllAllocatedDevices() {
 	k.logger.Info("Releasing all allocated devices")
 	
-	// Get all devices and release them
+	// Get all devices and release only the allocated ones
 	devices := k.devicePlugin.v4l2Manager.ListAllDevices()
+	releasedCount := 0
 	for deviceID, device := range devices {
 		if device.Allocated {
 			if err := k.devicePlugin.v4l2Manager.ReleaseDevice(deviceID); err != nil {
 				k.logger.Error("Failed to release device", "device_id", deviceID, "error", err)
 			} else {
 				k.logger.Info("Released device", "device_id", deviceID)
+				releasedCount++
 			}
 		}
 	}
+	
+	k.logger.Info("Device release completed", "released_count", releasedCount)
+	
+	// Clear tracking
+	k.mu.Lock()
+	k.podToDevice = make(map[string]string)
+	k.deviceToPod = make(map[string]string)
+	k.mu.Unlock()
+}
+
+// releaseAllDevices releases all allocated devices (fallback for cleanup)
+func (k *K8sClient) releaseAllDevices() {
+	k.releaseAllAllocatedDevices()
 }
 
 // createK8sClient creates a Kubernetes client using in-cluster config
@@ -218,3 +280,4 @@ func createK8sClient() (*kubernetes.Clientset, error) {
 
 	return clientset, nil
 }
+

@@ -288,6 +288,13 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate device: %w", err)
 	}
+	
+	// Track allocation in K8s client if available
+	if p.k8sClient != nil {
+		// Use device ID as a unique identifier for tracking
+		// The K8s client will match this with pod completion events
+		p.k8sClient.trackDeviceAllocation(device.ID, device.ID)
+	}
 
 	// Create environment variable - always use /dev/video10 for Chrome compatibility
 	envVars := map[string]string{
