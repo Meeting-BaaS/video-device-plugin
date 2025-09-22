@@ -342,6 +342,59 @@ func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
 	}, nil
 }
 
+// GetDevicesByPodID returns all devices allocated to a specific pod
+func (v *v4l2Manager) GetDevicesByPodID(podID string) []*VideoDevice {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	
+	var podDevices []*VideoDevice
+	for _, device := range v.devices {
+		if device.Allocated && device.PodID == podID {
+			// Return a copy to avoid race conditions
+			podDevices = append(podDevices, &VideoDevice{
+				ID:          device.ID,
+				Path:        device.Path,
+				Allocated:   device.Allocated,
+				PodID:       device.PodID,
+				AllocatedAt: device.AllocatedAt,
+			})
+		}
+	}
+	
+	return podDevices
+}
+
+// ReleaseDevicesByPodID releases all devices allocated to a specific pod
+func (v *v4l2Manager) ReleaseDevicesByPodID(podID string) error {
+	if podID == "" {
+		return fmt.Errorf("pod ID cannot be empty")
+	}
+	
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	
+	var releasedDevices []string
+	for deviceID, device := range v.devices {
+		if device.Allocated && device.PodID == podID {
+			device.Allocated = false
+			device.PodID = ""
+			device.AllocatedAt = time.Time{}
+			releasedDevices = append(releasedDevices, deviceID)
+		}
+	}
+	
+	if len(releasedDevices) > 0 {
+		v.logger.Info("Released devices for pod", 
+			"pod_id", podID,
+			"device_count", len(releasedDevices),
+			"devices", releasedDevices)
+	} else {
+		v.logger.Debug("No devices found for pod", "pod_id", podID)
+	}
+	
+	return nil
+}
+
 // ListAllDevices returns all devices (for debugging)
 func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 	v.mu.RLock()

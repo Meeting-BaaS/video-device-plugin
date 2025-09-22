@@ -12,6 +12,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
+	v1 "k8s.io/api/core/v1"
 )
 
 // VideoDevicePlugin implements the Kubernetes device plugin gRPC server
@@ -24,16 +29,24 @@ type VideoDevicePlugin struct {
 	stopCh      chan struct{}
 	mu          sync.RWMutex
 	registered  bool
+	k8sClient   *kubernetes.Clientset
 }
 
 // NewVideoDevicePlugin creates a new VideoDevicePlugin instance
 func NewVideoDevicePlugin(config *DevicePluginConfig, v4l2Manager V4L2Manager, logger *slog.Logger) *VideoDevicePlugin {
+	// Initialize Kubernetes client
+	k8sClient, err := createK8sClient()
+	if err != nil {
+		logger.Warn("Failed to create Kubernetes client, pod monitoring will be disabled", "error", err)
+	}
+
 	return &VideoDevicePlugin{
 		config:      config,
 		v4l2Manager: v4l2Manager,
 		logger:      logger,
 		stopCh:      make(chan struct{}),
 		registered:  false,
+		k8sClient:   k8sClient,
 	}
 }
 
@@ -78,6 +91,9 @@ func (p *VideoDevicePlugin) Start() error {
 	if err := p.RegisterWithKubelet(); err != nil {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
+
+	// Start pod monitoring for device release
+	p.startPodMonitoring()
 
 	p.logger.Info("Video device plugin started successfully")
 	return nil
@@ -251,50 +267,43 @@ func (p *VideoDevicePlugin) sendDeviceList(stream pluginapi.DevicePlugin_ListAnd
 
 // allocateContainer allocates devices for a container
 func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRequest) (*pluginapi.ContainerAllocateResponse, error) {
-	// Calculate total devices needed
-	totalDevices := 0
-	for _, resource := range req.DevicesIds {
-		if resource == p.config.ResourceName {
-			totalDevices++
-		}
-	}
-
-	if totalDevices == 0 {
+	// Get the number of devices requested
+	deviceCount := len(req.DevicesIds)
+	
+	if deviceCount == 0 {
 		return &pluginapi.ContainerAllocateResponse{}, nil
 	}
 
-	p.logger.Info("Allocating devices for container", "device_count", totalDevices)
+	p.logger.Info("Allocating devices for container", "device_count", deviceCount, "device_ids", req.DevicesIds)
 
-	// Allocate devices
-	var envVars []string
-	var mounts []*pluginapi.Mount
-
-	for i := 0; i < totalDevices; i++ {
-		device, err := p.v4l2Manager.AllocateDevice("pod-"+fmt.Sprintf("%d", time.Now().UnixNano()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to allocate device: %w", err)
-		}
-
-		// Add environment variable
-		envVars = append(envVars, createEnvVar("VIDEO_DEVICE", device.Path))
-
-		// Add device mount
-		mounts = append(mounts, &pluginapi.Mount{
-			ContainerPath: device.Path,
-			HostPath:      device.Path,
-			ReadOnly:      false,
-		})
-
-		p.logger.Info("Allocated device", 
-			"device_id", device.ID,
-			"device_path", device.Path)
+	// Allocate the first available device (we only support 1 device per pod)
+	device, err := p.v4l2Manager.AllocateDevice("pod-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate device: %w", err)
 	}
 
-	return &pluginapi.ContainerAllocateResponse{
-		Envs: map[string]string{
-			"VIDEO_DEVICE": envVars[0], // For now, just use the first device
+	// Create environment variable
+	envVars := map[string]string{
+		"VIDEO_DEVICE": device.Path,
+	}
+
+	// Create device specification
+	devices := []*pluginapi.DeviceSpec{
+		{
+			ContainerPath: device.Path,
+			HostPath:      device.Path,
+			Permissions:   "rw",
 		},
-		Mounts: mounts,
+	}
+
+	p.logger.Info("Allocated device", 
+		"device_id", device.ID,
+		"device_path", device.Path,
+		"env_var", "VIDEO_DEVICE="+device.Path)
+
+	return &pluginapi.ContainerAllocateResponse{
+		Devices: devices,
+		Envs:    envVars,
 	}, nil
 }
 
@@ -336,6 +345,71 @@ func (p *VideoDevicePlugin) GetDeviceStatus() *DeviceStatus {
 		AllocatedDevices: p.v4l2Manager.GetAllocatedDeviceCount(),
 		Devices:          p.v4l2Manager.GetAvailableDevices(),
 		LastUpdated:      time.Now(),
+	}
+}
+
+// createK8sClient creates a Kubernetes client using in-cluster config
+func createK8sClient() (*kubernetes.Clientset, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	return clientset, nil
+}
+
+// startPodMonitoring starts monitoring pods for device release
+func (p *VideoDevicePlugin) startPodMonitoring() {
+	if p.k8sClient == nil {
+		p.logger.Warn("Kubernetes client not available, skipping pod monitoring")
+		return
+	}
+
+	p.logger.Info("Starting pod monitoring for device release")
+
+	// Watch for pods that request our video device resource
+	watchlist := cache.NewListWatchFromClient(
+		p.k8sClient.CoreV1().RESTClient(),
+		"pods",
+		"", // All namespaces
+		fields.Everything(),
+	)
+
+	_, controller := cache.NewInformer(
+		watchlist,
+		&v1.Pod{},
+		0, // No resync period
+		cache.ResourceEventHandlerFuncs{
+			DeleteFunc: func(obj interface{}) {
+				pod := obj.(*v1.Pod)
+				p.handlePodDeletion(pod)
+			},
+		},
+	)
+
+	// Start the controller in a goroutine
+	go controller.Run(p.stopCh)
+}
+
+// handlePodDeletion handles when a pod is deleted and releases its devices
+func (p *VideoDevicePlugin) handlePodDeletion(pod *v1.Pod) {
+	podID := fmt.Sprintf("pod-%s-%s", pod.Namespace, pod.Name)
+	
+	p.logger.Info("Pod deleted, checking for device release", 
+		"pod_name", pod.Name,
+		"pod_namespace", pod.Namespace,
+		"pod_id", podID)
+
+	// Release devices allocated to this pod
+	if err := p.v4l2Manager.ReleaseDevicesByPodID(podID); err != nil {
+		p.logger.Error("Failed to release devices for pod", 
+			"pod_id", podID,
+			"error", err)
 	}
 }
 

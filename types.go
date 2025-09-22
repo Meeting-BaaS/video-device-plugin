@@ -40,6 +40,9 @@ type V4L2Manager interface {
 	// ReleaseDevice releases a device back to the pool
 	ReleaseDevice(deviceID string) error
 	
+	// ReleaseDevicesByPodID releases all devices allocated to a specific pod
+	ReleaseDevicesByPodID(podID string) error
+	
 	// IsHealthy checks if the V4L2 system is healthy
 	IsHealthy() bool
 	
