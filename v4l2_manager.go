@@ -24,9 +24,9 @@ func NewV4L2Manager(logger *slog.Logger, devicePerm int) V4L2Manager {
 	}
 }
 
-// CreateDevices creates the specified number of video devices
+// CreateDevices discovers and registers the specified number of video devices
 func (v *v4l2Manager) CreateDevices(count int) error {
-	v.logger.Info("Creating video devices", "count", count)
+	v.logger.Info("Discovering video devices", "count", count)
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -66,23 +66,23 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 		}
 
 		v.devices[deviceID] = device
-		v.logger.Debug("Created device", "device_id", deviceID, "device_path", devicePath)
+		v.logger.Debug("Registered device", "device_id", deviceID, "device_path", devicePath)
 	}
 
 	actualCount := len(v.devices)
 	if actualCount == 0 {
-		return fmt.Errorf("no video devices were created")
+		return fmt.Errorf("no video devices were found")
 	}
 
 	if actualCount < count {
-		v.logger.Warn("Created fewer devices than requested",
+		v.logger.Warn("Found fewer devices than requested",
 			"requested", count,
-			"created", actualCount)
+			"found", actualCount)
 	}
 
-	v.logger.Info("Successfully created video devices",
+	v.logger.Info("Successfully registered video devices",
 		"requested", count,
-		"created", actualCount)
+		"registered", actualCount)
 
 	return nil
 }

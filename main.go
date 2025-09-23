@@ -62,12 +62,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set device permissions
-	if err := setDevicePermissions(config, logger); err != nil {
-		logger.Error("Failed to set device permissions", "error", err)
-		os.Exit(1)
-	}
-
 	// Ensure device count and types match config exactly
 	if err := verifyV4L2Configuration(config, logger); err != nil {
 		logger.Error("v4l2 configuration verification failed", "error", err)
@@ -126,7 +120,7 @@ func main() {
 
 // waitForDevicesReady waits for devices to be created and ready
 func waitForDevicesReady(v4l2Manager V4L2Manager, config *DevicePluginConfig, logger *slog.Logger) error {
-	logger.Info("Starting video device plugin...")
+	logger.Info("Waiting for devices to be ready...")
 
 	// Wait for devices to be available
 	maxWait := time.Duration(config.DeviceCreationTimeout) * time.Second

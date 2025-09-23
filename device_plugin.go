@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -398,7 +397,7 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 			return
 		case <-ticker.C:
 			// Check if kubelet socket still exists
-			if !fileExists(p.config.KubeletSocket) {
+			if !checkDeviceExists(p.config.KubeletSocket) {
 				p.logger.Warn("Kubelet socket not found, kubelet may have restarted")
 
 				// Wait for kubelet to come back up
@@ -407,7 +406,7 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 					case <-p.stopCh:
 						return
 					case <-time.After(5 * time.Second):
-						if fileExists(p.config.KubeletSocket) {
+						if checkDeviceExists(p.config.KubeletSocket) {
 							p.logger.Info("Kubelet socket found, attempting re-registration")
 
 							// Reset registration status
@@ -434,8 +433,3 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 	}
 }
 
-// fileExists checks if a file exists
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return !os.IsNotExist(err)
-}
