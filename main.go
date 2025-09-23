@@ -33,7 +33,8 @@ func main() {
 			"v4l2_exclusive_caps", config.V4L2ExclusiveCaps,
 			"resource_name", config.ResourceName,
 			"kubelet_socket", config.KubeletSocket,
-			"socket_path", config.SocketPath)
+			"socket_path", config.SocketPath,
+			"cleanup_timeout", config.CleanupTimeout)
 	}
 
 	// Warn about v4l2loopback device limit
@@ -113,7 +114,7 @@ func main() {
 	}
 
 	// Cleanup v4l2loopback module
-	cleanupV4L2Module(logger)
+	cleanupV4L2Module(config, logger)
 
 	logger.Info("Video device plugin shutdown complete")
 }

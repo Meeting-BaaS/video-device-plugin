@@ -23,8 +23,10 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 			logger.Warn("v4l2loopback configuration mismatch detected", "error", err)
 			logger.Info("Reloading v4l2loopback module with correct configuration...")
 
-			// Unload the module first
-			if unloadErr := exec.Command("modprobe", "-r", "v4l2loopback").Run(); unloadErr != nil {
+			// Unload the module first (time-bounded)
+			unloadCtx, unloadCancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
+			defer unloadCancel()
+			if unloadErr := exec.CommandContext(unloadCtx, "modprobe", "-r", "v4l2loopback").Run(); unloadErr != nil {
 				logger.Warn("Failed to unload existing v4l2loopback module", "error", unloadErr)
 				// Continue anyway, modprobe might handle the reload
 			}
@@ -36,8 +38,10 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 
 	// CRITICAL: Load videodev module first (required for v4l2loopback)
 	logger.Info("Loading videodev module (required for v4l2loopback)...")
-	if err := exec.Command("modprobe", "videodev").Run(); err != nil {
-		logger.Error("Failed to load videodev module - this is required for v4l2loopback")
+	vctx, vcancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
+	defer vcancel()
+	if out, err := exec.CommandContext(vctx, "modprobe", "videodev").CombinedOutput(); err != nil {
+		logger.Error("Failed to load videodev module - this is required for v4l2loopback", "error", err, "output", strings.TrimSpace(string(out)))
 		logger.Info("Make sure linux-modules-extra-$(uname -r) is installed")
 		return fmt.Errorf("failed to load videodev module: %w", err)
 	}
@@ -105,7 +109,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 }
 
 // cleanupV4L2Module unloads the v4l2loopback module on shutdown
-func cleanupV4L2Module(logger *slog.Logger) {
+func cleanupV4L2Module(config *DevicePluginConfig, logger *slog.Logger) {
 	logger.Info("Cleaning up v4l2loopback module")
 
 	// Check if v4l2loopback module is loaded
@@ -123,9 +127,11 @@ func cleanupV4L2Module(logger *slog.Logger) {
 
 	// Unload v4l2loopback module
 	logger.Info("Unloading v4l2loopback module...")
-	unloadCmd := exec.Command("modprobe", "-r", "v4l2loopback")
-	if err := unloadCmd.Run(); err != nil {
-		logger.Warn("Failed to unload v4l2loopback module", "error", err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.CleanupTimeout)*time.Second)
+	defer cancel()
+	unloadCmd := exec.CommandContext(ctx, "modprobe", "-r", "v4l2loopback")
+	if out, err := unloadCmd.CombinedOutput(); err != nil {
+		logger.Warn("Failed to unload v4l2loopback module", "error", err, "output", strings.TrimSpace(string(out)))
 		logger.Info("Module may be in use by other processes")
 	} else {
 		logger.Info("v4l2loopback module unloaded successfully")
@@ -137,9 +143,11 @@ func cleanupV4L2Module(logger *slog.Logger) {
 		// Check if any other video modules are using videodev
 		if loaded, err := isModuleLoaded("v4l2loopback"); err == nil && !loaded {
 			// No other modules using videodev, try to unload it
-			unloadVideodevCmd := exec.Command("modprobe", "-r", "videodev")
-			if err := unloadVideodevCmd.Run(); err != nil {
-				logger.Info("videodev module still needed by other modules, keeping loaded")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.CleanupTimeout)*time.Second)
+			defer cancel()
+			unloadVideodevCmd := exec.CommandContext(ctx, "modprobe", "-r", "videodev")
+			if out, err := unloadVideodevCmd.CombinedOutput(); err != nil {
+				logger.Info("videodev module still needed by other modules, keeping loaded", "output", strings.TrimSpace(string(out)))
 			} else {
 				logger.Info("videodev module unloaded successfully")
 			}

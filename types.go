@@ -42,6 +42,7 @@ type DevicePluginConfig struct {
 	AllocationTimeout     int `json:"allocation_timeout"`      // Device allocation timeout in seconds
 	DeviceCreationTimeout int `json:"device_creation_timeout"` // Device creation timeout in seconds
 	ShutdownTimeout       int `json:"shutdown_timeout"`        // Graceful shutdown timeout in seconds
+	CleanupTimeout        int `json:"cleanup_timeout"`         // Module cleanup timeout in seconds
 }
 
 // V4L2Manager interface for managing V4L2 devices
