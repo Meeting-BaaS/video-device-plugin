@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"strings"
 	"sync"
 )
 
@@ -28,78 +27,77 @@ func NewV4L2Manager(logger *slog.Logger) V4L2Manager {
 // CreateDevices creates the specified number of video devices
 func (v *v4l2Manager) CreateDevices(count int) error {
 	v.logger.Info("Creating video devices", "count", count)
-	
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	
+
 	// Clear existing devices
 	v.devices = make(map[string]*VideoDevice)
-	
+
 	// Create devices from /dev/video{VideoDeviceStartNumber} to /dev/video{VideoDeviceStartNumber+count-1}
 	// Starting from video{VideoDeviceStartNumber} to avoid conflicts with system video devices
 	for i := 0; i < count; i++ {
 		deviceID := fmt.Sprintf("video%d", VideoDeviceStartNumber+i)
 		devicePath := fmt.Sprintf("/dev/video%d", VideoDeviceStartNumber+i)
-		
+
 		// Check if device exists
 		if !checkDeviceExists(devicePath) {
 			v.logger.Warn("Device does not exist", "device_path", devicePath)
 			continue
 		}
-		
+
 		// Check if device is readable
 		if !checkDeviceReadable(devicePath) {
 			v.logger.Warn("Device is not readable", "device_path", devicePath)
 			continue
 		}
-		
+
 		// Set 666 permissions on the device to ensure it's accessible
 		if err := exec.Command("chmod", "666", devicePath).Run(); err != nil {
 			v.logger.Warn("Failed to set permissions", "device", devicePath, "error", err)
 		} else {
 			v.logger.Debug("Set permissions", "device", devicePath, "permissions", "666")
 		}
-		
+
 		// Create device entry
 		device := &VideoDevice{
 			ID:   deviceID,
 			Path: devicePath,
 		}
-		
+
 		v.devices[deviceID] = device
 		v.logger.Debug("Created device", "device_id", deviceID, "device_path", devicePath)
 	}
-	
+
 	actualCount := len(v.devices)
 	if actualCount == 0 {
 		return fmt.Errorf("no video devices were created")
 	}
-	
+
 	if actualCount < count {
-		v.logger.Warn("Created fewer devices than requested", 
-			"requested", count, 
+		v.logger.Warn("Created fewer devices than requested",
+			"requested", count,
 			"created", actualCount)
 	}
-	
-	v.logger.Info("Successfully created video devices", 
-		"requested", count, 
+
+	v.logger.Info("Successfully created video devices",
+		"requested", count,
 		"created", actualCount)
-	
+
 	v.healthy = true
 	return nil
 }
-
 
 // GetDeviceByID returns a device by its ID
 func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	
+
 	device, exists := v.devices[deviceID]
 	if !exists {
 		return nil, fmt.Errorf("device not found: %s", deviceID)
 	}
-	
+
 	// Return a copy of the device (no allocation state tracking)
 	return &VideoDevice{
 		ID:   device.ID,
@@ -107,13 +105,11 @@ func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
 	}, nil
 }
 
-
-
 // IsHealthy checks if the V4L2 system is healthy
-func (v *v4l2Manager) IsHealthy() bool {
+func (v *v4l2Manager) IsHealthy(maxDevices int) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	
+
 	// If we have devices in our map, check them
 	if len(v.devices) > 0 {
 		// Check if all devices still exist and are accessible
@@ -125,35 +121,35 @@ func (v *v4l2Manager) IsHealthy() bool {
 		}
 		return true
 	}
-	
+
 	// If no devices in our map, check if devices exist in the system
 	// This handles the case where devices are created by startup script
-	for i := 0; i < 8; i++ {
-		devicePath := fmt.Sprintf("/dev/video%d", i)
+	for i := 0; i < maxDevices; i++ {
+		devicePath := fmt.Sprintf("/dev/video%d", VideoDeviceStartNumber+i)
 		if !checkDeviceExists(devicePath) || !checkDeviceReadable(devicePath) {
 			v.logger.Warn("System device is not healthy", "device_path", devicePath)
 			return false
 		}
 	}
-	
+
 	return true
 }
 
 // GetDeviceCount returns the total number of devices
-func (v *v4l2Manager) GetDeviceCount() int {
+func (v *v4l2Manager) GetDeviceCount(maxDevices int) int {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	
+
 	// If we have devices in our map, return that count
 	if len(v.devices) > 0 {
 		return len(v.devices)
 	}
-	
+
 	// If no devices in our map, count devices in the system
 	// This handles the case where devices are created by startup script
 	count := 0
-	for i := 0; i < 8; i++ {
-		devicePath := fmt.Sprintf("/dev/video%d", i)
+	for i := 0; i < maxDevices; i++ {
+		devicePath := fmt.Sprintf("/dev/video%d", VideoDeviceStartNumber+i)
 		if checkDeviceExists(devicePath) {
 			count++
 		}
@@ -161,26 +157,11 @@ func (v *v4l2Manager) GetDeviceCount() int {
 	return count
 }
 
-
-// isModuleLoaded checks if the v4l2loopback module is loaded
-func (v *v4l2Manager) isModuleLoaded() bool {
-	cmd := exec.Command("lsmod")
-	output, err := cmd.Output()
-	if err != nil {
-		v.logger.Debug("Failed to check loaded modules", "error", err)
-		return false
-	}
-	
-	return strings.Contains(string(output), "v4l2loopback")
-}
-
-
-
 // ListAllDevices returns all devices
 func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	
+
 	devices := make(map[string]*VideoDevice)
 	for id, device := range v.devices {
 		devices[id] = &VideoDevice{
@@ -188,7 +169,7 @@ func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 			Path: device.Path,
 		}
 	}
-	
+
 	return devices
 }
 
@@ -196,20 +177,20 @@ func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 func (v *v4l2Manager) GetDeviceHealth(deviceID string) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	
+
 	device, exists := v.devices[deviceID]
 	if !exists {
 		v.logger.Warn("Device not found for health check", "device_id", deviceID)
 		return false
 	}
-	
+
 	// Check if device exists and is readable
 	healthy := checkDeviceExists(device.Path) && checkDeviceReadable(device.Path)
 	if !healthy {
-		v.logger.Warn("Device health check failed", 
-			"device_id", deviceID, 
+		v.logger.Warn("Device health check failed",
+			"device_id", deviceID,
 			"device_path", device.Path)
 	}
-	
+
 	return healthy
 }

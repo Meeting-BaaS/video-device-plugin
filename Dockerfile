@@ -15,7 +15,9 @@ RUN go mod download
 COPY . .
 
 # Build the Go application
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=386 go build \
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -a -installsuffix cgo \
     -ldflags '-w -s' \
     -o video-device-plugin .
@@ -59,10 +61,6 @@ RUN groupadd -r videoplugin && useradd -r -g videoplugin videoplugin
 
 # Expose metrics port (if enabled)
 EXPOSE 8080
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD ls /dev/video* | wc -l | grep -q 8 || exit 1
 
 # Set the Go binary as the entrypoint
 ENTRYPOINT ["/usr/local/bin/video-device-plugin"]

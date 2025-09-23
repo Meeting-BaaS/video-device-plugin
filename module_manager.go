@@ -10,7 +10,7 @@ import (
 // loadV4L2LoopbackModule loads the v4l2loopback kernel module
 func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) error {
 	logger.Info("Loading v4l2loopback kernel module...")
-	
+
 	// Check if module is already loaded
 	if lsmodOutput, err := exec.Command("lsmod").Output(); err == nil {
 		if strings.Contains(string(lsmodOutput), "v4l2loopback") {
@@ -18,7 +18,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 			return nil
 		}
 	}
-	
+
 	// CRITICAL: Load videodev module first (required for v4l2loopback)
 	logger.Info("Loading videodev module (required for v4l2loopback)...")
 	if err := exec.Command("modprobe", "videodev").Run(); err != nil {
@@ -26,7 +26,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		logger.Info("Make sure linux-modules-extra-$(uname -r) is installed")
 		return fmt.Errorf("failed to load videodev module: %w", err)
 	}
-	
+
 	// Verify videodev is loaded
 	if lsmodOutput, err := exec.Command("lsmod").Output(); err == nil {
 		if strings.Contains(string(lsmodOutput), "videodev") {
@@ -36,7 +36,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 			return fmt.Errorf("videodev module not loaded")
 		}
 	}
-	
+
 	// Load the v4l2loopback module with our specific parameters
 	// Using video_nr=VideoDeviceStartNumber-{VideoDeviceStartNumber+max_devices-1} to avoid conflicts with system video devices
 	videoNumbers := make([]string, config.MaxDevices)
@@ -47,13 +47,13 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		cardLabels[i] = fmt.Sprintf(`"%s"`, config.V4L2CardLabel)
 		exclusiveCaps[i] = fmt.Sprintf("%d", config.V4L2ExclusiveCaps)
 	}
-	
+
 	cmd := exec.Command("modprobe", "v4l2loopback",
 		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
 		fmt.Sprintf("max_buffers=%d", config.V4L2MaxBuffers),
 		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
 		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
-	
+
 	if err := cmd.Run(); err != nil {
 		logger.Error("Failed to load v4l2loopback module")
 		logger.Info("Checking dmesg for errors:")
@@ -67,7 +67,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		}
 		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
 	}
-	
+
 	logger.Info("v4l2loopback module loaded successfully")
 	return nil
 }
@@ -75,7 +75,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 // cleanupV4L2Module unloads the v4l2loopback module on shutdown
 func cleanupV4L2Module(logger *slog.Logger) {
 	logger.Info("Cleaning up v4l2loopback module")
-	
+
 	// Check if v4l2loopback module is loaded
 	cmd := exec.Command("lsmod")
 	output, err := cmd.Output()
@@ -83,12 +83,12 @@ func cleanupV4L2Module(logger *slog.Logger) {
 		logger.Warn("Failed to check loaded modules", "error", err)
 		return
 	}
-	
+
 	if !strings.Contains(string(output), "v4l2loopback") {
 		logger.Info("v4l2loopback module not loaded, nothing to cleanup")
 		return
 	}
-	
+
 	// Unload v4l2loopback module
 	logger.Info("Unloading v4l2loopback module...")
 	unloadCmd := exec.Command("modprobe", "-r", "v4l2loopback")
@@ -98,7 +98,7 @@ func cleanupV4L2Module(logger *slog.Logger) {
 	} else {
 		logger.Info("v4l2loopback module unloaded successfully")
 	}
-	
+
 	// Check if videodev module can be unloaded (if not needed by other modules)
 	if strings.Contains(string(output), "videodev") {
 		logger.Info("Checking if videodev module can be unloaded")
@@ -115,6 +115,6 @@ func cleanupV4L2Module(logger *slog.Logger) {
 			}
 		}
 	}
-	
+
 	logger.Info("Cleanup completed")
 }

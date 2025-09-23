@@ -1,16 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -39,7 +36,7 @@ func setupLogger(level string) *slog.Logger {
 	}
 
 	opts := &slog.HandlerOptions{
-		Level: logLevel,
+		Level:     logLevel,
 		AddSource: true,
 	}
 
@@ -50,36 +47,34 @@ func setupLogger(level string) *slog.Logger {
 // loadConfig loads configuration from environment variables
 func loadConfig() *DevicePluginConfig {
 	// Try to load .env file if it exists
-	if err := loadEnvFile(); err != nil {
-		// .env file not found or error loading it - that's okay, continue with system env vars
-	}
+	_ = loadEnvFile() // .env file not found or error loading it - that's okay, continue with system env vars
 
 	config := &DevicePluginConfig{
 		// Core Configuration
-		MaxDevices:      getEnvInt("MAX_DEVICES", 8),
-		NodeName:        getEnv("NODE_NAME", ""),
-		KubeletSocket:   getEnv("KUBELET_SOCKET", "/var/lib/kubelet/device-plugins/kubelet.sock"),
-		ResourceName:    getEnv("RESOURCE_NAME", "meeting-baas.io/video-devices"),
-		SocketPath:      getEnv("SOCKET_PATH", "/var/lib/kubelet/device-plugins/video-device-plugin.sock"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
-		
+		MaxDevices:    getEnvInt("MAX_DEVICES", 8),
+		NodeName:      getEnv("NODE_NAME", ""),
+		KubeletSocket: getEnv("KUBELET_SOCKET", "/var/lib/kubelet/device-plugins/kubelet.sock"),
+		ResourceName:  getEnv("RESOURCE_NAME", "meeting-baas.io/video-devices"),
+		SocketPath:    getEnv("SOCKET_PATH", "/var/lib/kubelet/device-plugins/video-device-plugin.sock"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
+
 		// Development/Debugging
-		Debug:           getEnvBool("DEBUG", false),
-		
+		Debug: getEnvBool("DEBUG", false),
+
 		// V4L2 Configuration
 		V4L2MaxBuffers:    getEnvInt("V4L2_MAX_BUFFERS", 2),
 		V4L2ExclusiveCaps: getEnvInt("V4L2_EXCLUSIVE_CAPS", 1),
 		V4L2CardLabel:     getEnv("V4L2_CARD_LABEL", "Default WebCam"),
-		
+
 		// Kubernetes Integration
 		KubernetesNamespace: getEnv("KUBERNETES_NAMESPACE", "kube-system"),
 		ServiceAccountName:  getEnv("SERVICE_ACCOUNT_NAME", "video-device-plugin"),
-		
+
 		// Monitoring and Observability
 		EnableMetrics:       getEnvBool("ENABLE_METRICS", false),
 		MetricsPort:         getEnvInt("METRICS_PORT", 8080),
 		HealthCheckInterval: getEnvInt("HEALTH_CHECK_INTERVAL", 30),
-		
+
 		// Performance Tuning
 		AllocationTimeout:     getEnvInt("ALLOCATION_TIMEOUT", 30),
 		DeviceCreationTimeout: getEnvInt("DEVICE_CREATION_TIMEOUT", 60),
@@ -114,8 +109,8 @@ func loadEnvFile() error {
 
 // validateConfig validates the configuration
 func validateConfig(config *DevicePluginConfig) error {
-	if config.MaxDevices <= 0 || config.MaxDevices > 16 {
-		return fmt.Errorf("MAX_DEVICES must be between 1 and 16, got %d", config.MaxDevices)
+	if config.MaxDevices <= 0 || config.MaxDevices > 8 {
+		return fmt.Errorf("MAX_DEVICES must be between 1 and 8, got %d", config.MaxDevices)
 	}
 
 	if config.NodeName == "" {
@@ -161,13 +156,6 @@ func getEnvBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
-// executeCommand executes a system command safely
-func executeCommand(ctx context.Context, cmd string, args []string) error {
-	// This is a placeholder - in a real implementation, you would use os/exec
-	// For now, we'll assume the modprobe command is handled by the startup script
-	return nil
-}
-
 // checkDeviceExists checks if a device file exists and is accessible
 func checkDeviceExists(path string) bool {
 	_, err := os.Stat(path)
@@ -180,7 +168,9 @@ func checkDeviceReadable(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close() // Ignore close error for device readability check
+	}()
 	return true
 }
 
@@ -208,74 +198,4 @@ func cleanupSocket(socketPath string) error {
 		return os.Remove(socketPath)
 	}
 	return nil
-}
-
-// formatDuration formats a duration for logging
-func formatDuration(d time.Duration) string {
-	if d < time.Millisecond {
-		return fmt.Sprintf("%dμs", d.Microseconds())
-	}
-	if d < time.Second {
-		return fmt.Sprintf("%.2fms", float64(d.Nanoseconds())/1e6)
-	}
-	return d.String()
-}
-
-// createLogFields creates a map of fields for structured logging
-func createLogFields(deviceID, podID, nodeName string) map[string]interface{} {
-	fields := make(map[string]interface{})
-	
-	if deviceID != "" {
-		fields["device_id"] = deviceID
-	}
-	if podID != "" {
-		fields["pod_id"] = podID
-	}
-	if nodeName != "" {
-		fields["node_name"] = nodeName
-	}
-	
-	fields["timestamp"] = time.Now().UTC().Format(time.RFC3339)
-	
-	return fields
-}
-
-// validateDevicePath validates that a device path is safe
-func validateDevicePath(path string) error {
-	if !strings.HasPrefix(path, "/dev/video") {
-		return fmt.Errorf("invalid device path: %s", path)
-	}
-	
-	// Check for path traversal
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("invalid device path: %s", path)
-	}
-	
-	// Ensure it's a video device
-	if !strings.HasPrefix(filepath.Base(path), "video") {
-		return fmt.Errorf("not a video device: %s", path)
-	}
-	
-	return nil
-}
-
-// generateDeviceID generates a device ID from a device path
-func generateDeviceID(devicePath string) string {
-	return filepath.Base(devicePath)
-}
-
-
-// getDevicePathFromID generates a device path from a device ID
-func getDevicePathFromID(deviceID string) string {
-	return filepath.Join("/dev", deviceID)
-}
-
-// createEnvVar creates an environment variable string
-func createEnvVar(name, value string) string {
-	return fmt.Sprintf("%s=%s", name, value)
-}
-
-// createMountPath creates a device mount path
-func createMountPath(devicePath string) string {
-	return fmt.Sprintf("%s:%s", devicePath, devicePath)
 }

@@ -4,40 +4,48 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // verifyVideoDevices verifies that video devices were created
 func verifyVideoDevices(config *DevicePluginConfig, logger *slog.Logger) error {
 	logger.Info("Verifying video devices...")
-	
+
 	deviceCount := 0
 	for i := VideoDeviceStartNumber; i < VideoDeviceStartNumber+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
-		if _, err := os.Stat(devicePath); err == nil {
+		if stat, err := os.Stat(devicePath); err == nil {
 			deviceCount++
-			if stat, err := os.Stat(devicePath); err == nil {
-				logger.Info(fmt.Sprintf("   %s %s %s %s %s %s", 
-					stat.Mode().String(),
-					"1", "root", "video", 
-					fmt.Sprintf("%d, %d", 81, i-VideoDeviceStartNumber),
-					stat.ModTime().Format("Jan 02 15:04"),
-					devicePath))
+			if st, ok := stat.Sys().(*syscall.Stat_t); ok {
+				maj := unix.Major(uint64(st.Rdev))
+				min := unix.Minor(uint64(st.Rdev))
+				logger.Info("video device",
+					"path", devicePath,
+					"mode", stat.Mode().String(),
+					"uid", st.Uid,
+					"gid", st.Gid,
+					"rdev", fmt.Sprintf("%d,%d", maj, min),
+					"mtime", stat.ModTime())
+			} else {
+				logger.Info("video device", "path", devicePath, "mode", stat.Mode().String())
 			}
 		}
 	}
-	
+
 	if deviceCount == 0 {
 		return fmt.Errorf("no video devices found")
 	}
-	
-	logger.Info(fmt.Sprintf("Found %d video devices:", deviceCount))
+
+	logger.Info("video devices found", "count", deviceCount, "requested", config.MaxDevices)
 	return nil
 }
 
 // setDevicePermissions sets proper permissions on video devices
 func setDevicePermissions(config *DevicePluginConfig, logger *slog.Logger) error {
 	logger.Info("Setting device permissions...")
-	
+
 	for i := VideoDeviceStartNumber; i < VideoDeviceStartNumber+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
@@ -47,7 +55,7 @@ func setDevicePermissions(config *DevicePluginConfig, logger *slog.Logger) error
 			}
 		}
 	}
-	
+
 	logger.Info("Device permissions set")
 	return nil
 }

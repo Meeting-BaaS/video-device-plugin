@@ -294,7 +294,7 @@ spec:
             command:
             - /bin/sh
             - -c
-            - "ls /dev/video* | wc -l | grep -q 8"
+            - 'count=$(ls /dev/video* 2>/dev/null | wc -l); [ "$count" -ge "${MAX_DEVICES:-8}" ]'
           initialDelaySeconds: 30
           periodSeconds: 30
         readinessProbe:
@@ -302,7 +302,7 @@ spec:
             command:
             - /bin/sh
             - -c
-            - "ls /dev/video* | wc -l | grep -q 8"
+            - 'count=$(ls /dev/video* 2>/dev/null | wc -l); [ "$count" -ge "${MAX_DEVICES:-8}" ]'
           initialDelaySeconds: 10
           periodSeconds: 10
       volumes:
