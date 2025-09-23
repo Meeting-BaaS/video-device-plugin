@@ -12,7 +12,6 @@ type v4l2Manager struct {
 	devices map[string]*VideoDevice
 	logger  *slog.Logger
 	mu      sync.RWMutex
-	healthy bool
 }
 
 // NewV4L2Manager creates a new V4L2Manager instance
@@ -20,7 +19,6 @@ func NewV4L2Manager(logger *slog.Logger) V4L2Manager {
 	return &v4l2Manager{
 		devices: make(map[string]*VideoDevice),
 		logger:  logger,
-		healthy: false,
 	}
 }
 
@@ -84,7 +82,6 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 		"requested", count,
 		"created", actualCount)
 
-	v.healthy = true
 	return nil
 }
 

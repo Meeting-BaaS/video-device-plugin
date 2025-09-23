@@ -8,9 +8,6 @@ import (
 )
 
 func main() {
-	fmt.Println("Starting Video Device Plugin Container")
-	fmt.Println("==========================================")
-
 	// Load configuration
 	config := loadConfig()
 
@@ -68,6 +65,12 @@ func main() {
 	// Set device permissions
 	if err := setDevicePermissions(config, logger); err != nil {
 		logger.Error("Failed to set device permissions", "error", err)
+		os.Exit(1)
+	}
+
+	// Ensure device count and types match config exactly
+	if err := verifyV4L2Configuration(config, logger); err != nil {
+		logger.Error("v4l2 configuration verification failed", "error", err)
 		os.Exit(1)
 	}
 

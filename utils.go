@@ -65,7 +65,7 @@ func loadConfig() *DevicePluginConfig {
 		V4L2MaxBuffers:    getEnvInt("V4L2_MAX_BUFFERS", 2),
 		V4L2ExclusiveCaps: getEnvInt("V4L2_EXCLUSIVE_CAPS", 1),
 		V4L2CardLabel:     getEnv("V4L2_CARD_LABEL", "Default WebCam"),
-		V4L2DevicePerm:    getEnvInt("V4L2_DEVICE_PERM", 0666),
+		V4L2DevicePerm:    getEnvPerm("V4L2_DEVICE_PERM", 0666),
 
 		// Kubernetes Integration
 		KubernetesNamespace: getEnv("KUBERNETES_NAMESPACE", "kube-system"),
@@ -126,6 +126,13 @@ func validateConfig(config *DevicePluginConfig) error {
 		return fmt.Errorf("SOCKET_PATH is required")
 	}
 
+	if config.V4L2DevicePerm < 0 || config.V4L2DevicePerm > 0777 {
+		return fmt.Errorf("V4L2_DEVICE_PERM must be 0000-0777, got %o", config.V4L2DevicePerm)
+	}
+
+	// Warn about overly permissive permissions
+	warnAboutPermissivePermissions(config.V4L2DevicePerm)
+
 	return nil
 }
 
@@ -155,6 +162,29 @@ func getEnvBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+// getEnvPerm parses POSIX file modes; supports 0666, 0o666, or decimal
+func getEnvPerm(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if v, err := strconv.ParseUint(value, 0, 32); err == nil {
+			return int(v)
+		}
+	}
+	return defaultValue
+}
+
+// warnAboutPermissivePermissions warns about overly permissive file permissions
+func warnAboutPermissivePermissions(perm int) {
+	// Check for very permissive permissions (0777) - more permissive than default
+	if perm == 0777 {
+		fmt.Printf("WARNING: V4L2_DEVICE_PERM=%o is very permissive (world read/write/execute). Consider using 0644 for better security.\n", perm)
+	}
+	// Check for world-writable permissions that are more permissive than default (0666)
+	// Only warn if it's more permissive than the default
+	if perm > 0666 {
+		fmt.Printf("WARNING: V4L2_DEVICE_PERM=%o is more permissive than default (0666). Consider using 0644 for better security.\n", perm)
+	}
 }
 
 // checkDeviceExists checks if a device file exists and is accessible

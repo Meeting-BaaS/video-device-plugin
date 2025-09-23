@@ -87,6 +87,11 @@ func (p *VideoDevicePlugin) Start() error {
 
 	// Register with kubelet
 	if err := p.RegisterWithKubelet(); err != nil {
+		// Cleanup to avoid leaving a dangling socket
+		if p.server != nil {
+			p.server.Stop()
+		}
+		_ = cleanupSocket(p.config.SocketPath)
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
 
@@ -152,13 +157,15 @@ func (p *VideoDevicePlugin) RegisterWithKubelet() error {
 
 	// Create registration request
 	req := &pluginapi.RegisterRequest{
-		Version:      "v1beta1",
+		Version:      pluginapi.Version,
 		Endpoint:     filepath.Base(p.config.SocketPath),
 		ResourceName: p.config.ResourceName,
 	}
 
-	// Send registration request
-	_, err = client.Register(context.Background(), req)
+	// Send registration request with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = client.Register(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
@@ -286,41 +293,9 @@ func (p *VideoDevicePlugin) Allocate(ctx context.Context, req *pluginapi.Allocat
 	return finalResponse, nil
 }
 
-// GetDevicePluginOptions implements the GetDevicePluginOptions gRPC method
-func (p *VideoDevicePlugin) GetDevicePluginOptions(ctx context.Context, req *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
-	p.logger.Debug("GetDevicePluginOptions called")
-
-	return &pluginapi.DevicePluginOptions{
-		PreStartRequired:                false,
-		GetPreferredAllocationAvailable: false,
-	}, nil
-}
-
-// GetPreferredAllocation implements the GetPreferredAllocation gRPC method
-func (p *VideoDevicePlugin) GetPreferredAllocation(ctx context.Context, req *pluginapi.PreferredAllocationRequest) (*pluginapi.PreferredAllocationResponse, error) {
-	p.logger.Debug("GetPreferredAllocation called")
-
-	if len(req.ContainerRequests) == 0 {
-		return &pluginapi.PreferredAllocationResponse{}, nil
-	}
-
-	// For now, just return the requested devices as preferred
-	return &pluginapi.PreferredAllocationResponse{
-		ContainerResponses: []*pluginapi.ContainerPreferredAllocationResponse{
-			{
-				DeviceIDs: req.ContainerRequests[0].AvailableDeviceIDs,
-			},
-		},
-	}, nil
-}
-
-// PreStartContainer implements the PreStartContainer gRPC method
-func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginapi.PreStartContainerRequest) (*pluginapi.PreStartContainerResponse, error) {
-	p.logger.Debug("PreStartContainer called")
-
-	// We don't need to do anything before container start
-	return &pluginapi.PreStartContainerResponse{}, nil
-}
+// Note: GetDevicePluginOptions, GetPreferredAllocation, and PreStartContainer
+// are handled by the embedded pluginapi.UnimplementedDevicePluginServer
+// which provides appropriate "not implemented" responses.
 
 // allocateContainer allocates devices for a container
 func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRequest) (*pluginapi.ContainerAllocateResponse, error) {
