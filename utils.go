@@ -126,6 +126,10 @@ func validateConfig(config *DevicePluginConfig) error {
 		return fmt.Errorf("SOCKET_PATH is required")
 	}
 
+	if config.HealthCheckInterval <= 0 {
+		return fmt.Errorf("HEALTH_CHECK_INTERVAL must be > 0 seconds, got %d", config.HealthCheckInterval)
+	}
+
 	if config.V4L2DevicePerm < 0 || config.V4L2DevicePerm > 0777 {
 		return fmt.Errorf("V4L2_DEVICE_PERM must be 0000-0777, got %o", config.V4L2DevicePerm)
 	}

@@ -92,6 +92,10 @@ func (p *VideoDevicePlugin) Start() error {
 		if p.server != nil {
 			p.server.Stop()
 		}
+		if p.listener != nil {
+			_ = p.listener.Close()
+			p.listener = nil
+		}
 		_ = cleanupSocket(p.config.SocketPath)
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
