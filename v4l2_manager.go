@@ -9,16 +9,18 @@ import (
 
 // v4l2Manager implements the V4L2Manager interface
 type v4l2Manager struct {
-	devices map[string]*VideoDevice
-	logger  *slog.Logger
-	mu      sync.RWMutex
+	devices    map[string]*VideoDevice
+	logger     *slog.Logger
+	mu         sync.RWMutex
+	perm       os.FileMode
 }
 
 // NewV4L2Manager creates a new V4L2Manager instance
-func NewV4L2Manager(logger *slog.Logger) V4L2Manager {
+func NewV4L2Manager(logger *slog.Logger, devicePerm int) V4L2Manager {
 	return &v4l2Manager{
 		devices: make(map[string]*VideoDevice),
 		logger:  logger,
+		perm:    os.FileMode(devicePerm),
 	}
 }
 
@@ -50,11 +52,11 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 			continue
 		}
 
-		// Set 0666 permissions on the device to ensure it's accessible
-		if err := os.Chmod(devicePath, 0o666); err != nil {
+		// Set configured permissions on the device
+		if err := os.Chmod(devicePath, v.perm); err != nil {
 			v.logger.Warn("Failed to set permissions", "device", devicePath, "error", err)
 		} else {
-			v.logger.Debug("Set permissions", "device", devicePath, "permissions", "0666")
+			v.logger.Debug("Set permissions", "device", devicePath, "permissions", fmt.Sprintf("%#o", v.perm))
 		}
 
 		// Create device entry

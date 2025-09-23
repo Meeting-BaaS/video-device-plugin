@@ -178,12 +178,12 @@ func getEnvPerm(key string, defaultValue int) int {
 func warnAboutPermissivePermissions(perm int) {
 	// Check for very permissive permissions (0777) - more permissive than default
 	if perm == 0777 {
-		fmt.Printf("WARNING: V4L2_DEVICE_PERM=%o is very permissive (world read/write/execute). Consider using 0644 for better security.\n", perm)
+		fmt.Fprintf(os.Stderr, "WARNING: V4L2_DEVICE_PERM=%o is very permissive (world read/write/execute). Consider using 0644 for better security.\n", perm)
 	}
 	// Check for world-writable permissions that are more permissive than default (0666)
 	// Only warn if it's more permissive than the default
 	if perm > 0666 {
-		fmt.Printf("WARNING: V4L2_DEVICE_PERM=%o is more permissive than default (0666). Consider using 0644 for better security.\n", perm)
+		fmt.Fprintf(os.Stderr, "WARNING: V4L2_DEVICE_PERM=%o is more permissive than default (0666). Consider using 0644 for better security.\n", perm)
 	}
 }
 

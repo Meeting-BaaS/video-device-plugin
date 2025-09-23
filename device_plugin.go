@@ -22,6 +22,7 @@ type VideoDevicePlugin struct {
 	v4l2Manager V4L2Manager
 	logger      *slog.Logger
 	server      *grpc.Server
+	listener    net.Listener
 	stopCh      chan struct{}
 	mu          sync.RWMutex
 	registered  bool
@@ -65,6 +66,7 @@ func (p *VideoDevicePlugin) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on socket: %w", err)
 	}
+	p.listener = listener
 
 	// Start server in goroutine
 	serverReady := make(chan struct{})
@@ -113,6 +115,11 @@ func (p *VideoDevicePlugin) Stop() error {
 		p.server.Stop()
 	}
 
+	if p.listener != nil {
+		_ = p.listener.Close()
+		p.listener = nil
+	}
+
 	// Clean up socket
 	if err := cleanupSocket(p.config.SocketPath); err != nil {
 		p.logger.Warn("Failed to cleanup socket", "error", err)
@@ -130,10 +137,10 @@ func (p *VideoDevicePlugin) WaitForShutdown() {
 
 // RegisterWithKubelet registers the device plugin with kubelet
 func (p *VideoDevicePlugin) RegisterWithKubelet() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.registered {
+	p.mu.RLock()
+	already := p.registered
+	p.mu.RUnlock()
+	if already {
 		return nil
 	}
 
@@ -170,7 +177,9 @@ func (p *VideoDevicePlugin) RegisterWithKubelet() error {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
 
+	p.mu.Lock()
 	p.registered = true
+	p.mu.Unlock()
 	p.logger.Info("Successfully registered with kubelet")
 	return nil
 }
@@ -293,9 +302,18 @@ func (p *VideoDevicePlugin) Allocate(ctx context.Context, req *pluginapi.Allocat
 	return finalResponse, nil
 }
 
-// Note: GetDevicePluginOptions, GetPreferredAllocation, and PreStartContainer
-// are handled by the embedded pluginapi.UnimplementedDevicePluginServer
-// which provides appropriate "not implemented" responses.
+// GetDevicePluginOptions implements the GetDevicePluginOptions gRPC method
+func (p *VideoDevicePlugin) GetDevicePluginOptions(ctx context.Context, req *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
+	p.logger.Debug("GetDevicePluginOptions called")
+
+	return &pluginapi.DevicePluginOptions{
+		PreStartRequired:                false,
+		GetPreferredAllocationAvailable: false,
+	}, nil
+}
+
+// Note: GetPreferredAllocation and PreStartContainer are handled by the embedded
+// pluginapi.UnimplementedDevicePluginServer which provides appropriate "not implemented" responses.
 
 // allocateContainer allocates devices for a container
 func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRequest) (*pluginapi.ContainerAllocateResponse, error) {

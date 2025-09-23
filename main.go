@@ -75,7 +75,7 @@ func main() {
 	}
 
 	// Initialize V4L2 manager
-	v4l2Manager := NewV4L2Manager(logger)
+	v4l2Manager := NewV4L2Manager(logger, config.V4L2DevicePerm)
 
 	// Populate the V4L2 manager with the devices we just created
 	if err := v4l2Manager.CreateDevices(config.MaxDevices); err != nil {
