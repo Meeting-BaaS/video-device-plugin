@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"os/exec"
+	"os"
 	"sync"
 )
 
@@ -52,11 +52,11 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 			continue
 		}
 
-		// Set 666 permissions on the device to ensure it's accessible
-		if err := exec.Command("chmod", "666", devicePath).Run(); err != nil {
+		// Set 0666 permissions on the device to ensure it's accessible
+		if err := os.Chmod(devicePath, 0o666); err != nil {
 			v.logger.Warn("Failed to set permissions", "device", devicePath, "error", err)
 		} else {
-			v.logger.Debug("Set permissions", "device", devicePath, "permissions", "666")
+			v.logger.Debug("Set permissions", "device", devicePath, "permissions", "0666")
 		}
 
 		// Create device entry

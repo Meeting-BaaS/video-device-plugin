@@ -125,9 +125,11 @@ func main() {
 func waitForDevicesReady(v4l2Manager V4L2Manager, config *DevicePluginConfig, logger *slog.Logger) error {
 	logger.Info("Starting video device plugin...")
 
-	// Devices are already created by the main function, just verify they exist
 	// Wait for devices to be available
-	maxWait := 30 * time.Second
+	maxWait := time.Duration(config.DeviceCreationTimeout) * time.Second
+	if maxWait <= 0 {
+		maxWait = 30 * time.Second
+	}
 	checkInterval := 1 * time.Second
 	start := time.Now()
 

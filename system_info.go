@@ -24,11 +24,15 @@ func displaySystemInfo(logger *slog.Logger) {
 	// Get kernel version
 	if kernelInfo, err := exec.Command("uname", "-r").Output(); err == nil {
 		logger.Info("   Kernel version: " + strings.TrimSpace(string(kernelInfo)))
+	} else {
+		logger.Warn("Failed to get kernel version", "error", err)
 	}
 
 	// Get architecture
 	if archInfo, err := exec.Command("uname", "-m").Output(); err == nil {
 		logger.Info("   Architecture: " + strings.TrimSpace(string(archInfo)))
+	} else {
+		logger.Warn("Failed to get architecture", "error", err)
 	}
 
 	// Get memory info

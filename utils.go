@@ -65,6 +65,7 @@ func loadConfig() *DevicePluginConfig {
 		V4L2MaxBuffers:    getEnvInt("V4L2_MAX_BUFFERS", 2),
 		V4L2ExclusiveCaps: getEnvInt("V4L2_EXCLUSIVE_CAPS", 1),
 		V4L2CardLabel:     getEnv("V4L2_CARD_LABEL", "Default WebCam"),
+		V4L2DevicePerm:    getEnvInt("V4L2_DEVICE_PERM", 0666),
 
 		// Kubernetes Integration
 		KubernetesNamespace: getEnv("KUBERNETES_NAMESPACE", "kube-system"),
@@ -96,7 +97,7 @@ func loadConfig() *DevicePluginConfig {
 func loadEnvFile() error {
 	// Check if .env file exists
 	if _, err := os.Stat(".env"); os.IsNotExist(err) {
-		return fmt.Errorf(".env file not found")
+		return nil
 	}
 
 	// Load .env file
@@ -175,16 +176,17 @@ func checkDeviceReadable(path string) bool {
 }
 
 // setupSignalHandling sets up signal handling for graceful shutdown
-func setupSignalHandling() <-chan os.Signal {
+func setupSignalHandling() chan os.Signal {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	return sigChan
 }
 
 // waitForSignal waits for a shutdown signal
-func waitForSignal(sigChan <-chan os.Signal, logger *slog.Logger) {
+func waitForSignal(sigChan chan os.Signal, logger *slog.Logger) {
 	sig := <-sigChan
 	logger.Info("Received shutdown signal", "signal", sig.String())
+	signal.Stop(sigChan)
 }
 
 // ensureDirectory ensures a directory exists

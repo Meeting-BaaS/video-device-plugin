@@ -25,8 +25,9 @@ type DevicePluginConfig struct {
 
 	// V4L2 Configuration
 	V4L2MaxBuffers    int    `json:"v4l2_max_buffers"`    // Number of buffers for v4l2loopback
-	V4L2ExclusiveCaps int    `json:"v4l2_exclusive_caps"` // Enable exclusive capabilities
+	V4L2ExclusiveCaps int    `json:"v4l2_exclusive_caps"` // Enable exclusive capabilities (0,1) 0 is default and false, 1 is true
 	V4L2CardLabel     string `json:"v4l2_card_label"`     // Card label for devices
+	V4L2DevicePerm    int    `json:"v4l2_device_perm"`    // Device permissions (octal, e.g., 0666)
 
 	// Kubernetes Integration
 	KubernetesNamespace string `json:"kubernetes_namespace"` // Namespace for deployment

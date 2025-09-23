@@ -167,9 +167,11 @@ for _, device := range allDevices {
 ### System Requirements
 
 - **Operating System**: Ubuntu 24.04 LTS
-- **Kernel Version**: 6.8.0-64-generic (or compatible)
+- **Kernel Version**: 6.8.0-64-generic
 - **Kubernetes**: 1.33.4
 - **Container Runtime**: Docker/container with privileged mode support
+
+> **Note**: While these are the hard prerequisites for this repository, the device plugin can be configured for other systems. For different kernel and Ubuntu versions, the Dockerfile can be updated to download Linux headers for the required kernel version. Go dependencies should be changed based on the desired Kubernetes version. However, this module has been tested and verified on the above configuration.
 
 ### Required Kernel Modules
 
@@ -212,6 +214,7 @@ SOCKET_PATH=/var/lib/kubelet/device-plugins/video-device-plugin.sock
 V4L2_MAX_BUFFERS=2
 V4L2_EXCLUSIVE_CAPS=1
 V4L2_CARD_LABEL=MeetingBot_WebCam
+V4L2_DEVICE_PERM=0666
 
 # Monitoring
 ENABLE_METRICS=false
@@ -228,6 +231,24 @@ HEALTH_CHECK_INTERVAL=30
 | `LOG_LEVEL` | Logging level | info | debug/info/warn/error |
 | `RESOURCE_NAME` | K8s resource name | meeting-baas.io/video-devices | String |
 | `V4L2_CARD_LABEL` | Device label | MeetingBot_WebCam | String |
+| `V4L2_DEVICE_PERM` | Device permissions (octal) | 0666 | 0600-0777 |
+
+### Security Considerations
+
+The `V4L2_DEVICE_PERM` setting controls file permissions for video devices:
+
+| Permission | Description | Use Case |
+|------------|-------------|----------|
+| `0666` (default) | `rw-rw-rw-` | Development, testing, shared access |
+| `0644` | `rw-r--r--` | Production with read-only access for non-owners |
+| `0600` | `rw-------` | High security, owner-only access |
+| `0640` | `rw-r-----` | Group access for specific users |
+
+**Recommendations:**
+
+- **Development**: Use `0666` for maximum compatibility
+- **Production**: Use `0644` or `0600` for better security
+- **Multi-tenant**: Use `0640` with proper group management
 
 ## 🐳 Building and Deployment
 
@@ -408,6 +429,9 @@ kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | jq
 
 # Check specific device health in logs
 kubectl logs -n kube-system -l name=video-device-plugin | grep "device health check failed"
+
+# Check device permissions
+kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/video*
 ```
 
 ### Common Issues
@@ -417,6 +441,7 @@ kubectl logs -n kube-system -l name=video-device-plugin | grep "device health ch
 | Pods stuck in Pending | DaemonSet not running | Check DaemonSet status and logs |
 | No video devices | v4l2loopback not loaded | Check kernel module loading in logs |
 | Permission denied | Missing privileged mode | Ensure `privileged: true` in DaemonSet |
+| Permission denied | Device permissions too restrictive | Check `V4L2_DEVICE_PERM` setting and adjust if needed |
 | Device allocation fails | All devices busy | Check device utilization and scaling |
 | Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
 | Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |

@@ -209,7 +209,7 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 	}
 
 	// Simple health monitoring loop (like GPU plugin)
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(time.Duration(p.config.HealthCheckInterval) * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -399,7 +399,6 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-monitorLoop:
 	for {
 		select {
 		case <-p.stopCh:
@@ -430,12 +429,15 @@ monitorLoop:
 							}
 
 							p.logger.Info("Successfully re-registered with kubelet after restart")
-							break monitorLoop
+							// Continue outer monitoring loop for future restarts
+							goto continueOuter
 						}
 					}
 				}
 			}
 		}
+	continueOuter:
+		// label target for goto to resume outer loop
 	}
 }
 

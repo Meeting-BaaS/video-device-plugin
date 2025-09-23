@@ -17,6 +17,10 @@ func verifyVideoDevices(config *DevicePluginConfig, logger *slog.Logger) error {
 	for i := VideoDeviceStartNumber; i < VideoDeviceStartNumber+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if stat, err := os.Stat(devicePath); err == nil {
+			if (stat.Mode() & os.ModeCharDevice) == 0 {
+				logger.Warn("non-char device at expected path", "path", devicePath, "mode", stat.Mode().String())
+				continue
+			}
 			deviceCount++
 			if st, ok := stat.Sys().(*syscall.Stat_t); ok {
 				maj := unix.Major(uint64(st.Rdev))
@@ -49,9 +53,10 @@ func setDevicePermissions(config *DevicePluginConfig, logger *slog.Logger) error
 	for i := VideoDeviceStartNumber; i < VideoDeviceStartNumber+config.MaxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if _, err := os.Stat(devicePath); err == nil {
-			// Set permissions to 666 (rw-rw-rw-)
-			if err := os.Chmod(devicePath, 0666); err != nil {
-				logger.Warn("Failed to set permissions", "device", devicePath, "error", err)
+			// Set permissions from config (default: 666 rw-rw-rw-)
+			perm := os.FileMode(config.V4L2DevicePerm)
+			if err := os.Chmod(devicePath, perm); err != nil {
+				logger.Warn("Failed to set permissions", "device", devicePath, "perm", fmt.Sprintf("%o", perm), "error", err)
 			}
 		}
 	}
