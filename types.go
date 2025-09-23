@@ -6,10 +6,8 @@ import (
 
 // VideoDevice represents a virtual video device
 type VideoDevice struct {
-	ID          string    `json:"id"`          // Device ID (e.g., "video0")
-	Path        string    `json:"path"`        // Device path (e.g., "/dev/video0")
-	Allocated   bool      `json:"allocated"`   // Whether device is currently allocated
-	AllocatedAt time.Time `json:"allocated_at"` // When device was allocated
+	ID   string `json:"id"`   // Device ID (e.g., "video0")
+	Path string `json:"path"` // Device path (e.g., "/dev/video0")
 }
 
 // DevicePluginConfig holds configuration for the device plugin
@@ -50,8 +48,8 @@ type V4L2Manager interface {
 	// CreateDevices creates the specified number of video devices
 	CreateDevices(count int) error
 	
-	// AllocateDevice allocates a specific device requested by kubelet
-	AllocateDevice(deviceID string) (*VideoDevice, error)
+	// GetDeviceByID returns a device by its ID
+	GetDeviceByID(deviceID string) (*VideoDevice, error)
 	
 	// IsHealthy checks if the V4L2 system is healthy
 	IsHealthy() bool
@@ -59,8 +57,11 @@ type V4L2Manager interface {
 	// GetDeviceCount returns the total number of devices
 	GetDeviceCount() int
 	
-	// ListAllDevices returns all devices (for debugging)
+	// ListAllDevices returns all devices
 	ListAllDevices() map[string]*VideoDevice
+	
+	// GetDeviceHealth returns health status for a specific device
+	GetDeviceHealth(deviceID string) bool
 }
 
 // DevicePluginServer interface for the gRPC device plugin server

@@ -16,13 +16,14 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 
 ## ✨ Key Benefits
 
-- **🎯 Kubernetes-Native**: Follows official device plugin best practices
+- **🎯 Kubernetes-Native**: Follows official device plugin best practices (like GPU plugins)
 - **🔧 Simple & Reliable**: No complex tracking or reconciliation needed
 - **⚡ High Performance**: Minimal overhead with thread-safe operations
 - **🛡️ Production Ready**: Handles edge cases and provides comprehensive logging
 - **📈 Scalable**: Works seamlessly with Kubernetes autoscaling
-- **🔄 Robust**: Auto-recovery from kubelet restarts and real-time state updates
-- **🔍 Observable**: Structured logging and health monitoring
+- **🔄 Robust**: Auto-recovery from kubelet restarts and real-time health updates
+- **🔍 Observable**: Structured logging and per-device health monitoring
+- **🚫 No Device Conflicts**: Automatic device isolation between concurrent pods
 
 ## 🏗️ Architecture Overview
 
@@ -53,13 +54,13 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 ```text
 1. Pod requests meeting-baas.io/video-devices: 1
 2. Kubelet queries device plugin for available devices via ListAndWatch
-3. Kubelet chooses which device to allocate (e.g., video10)
-4. Kubelet calls device plugin with specific device ID
-5. Device plugin validates and allocates the requested device
-6. Device plugin triggers immediate ListAndWatch update (device no longer available)
-7. Device plugin returns device info (env vars, mounts) to kubelet
-8. Pod starts with VIDEO_DEVICE=/dev/video10
-9. Kubernetes handles device lifecycle management
+3. Device plugin reports all 8 devices as available (with health status)
+4. Kubelet chooses which device to allocate (e.g., video10)
+5. Kubelet calls device plugin with specific device ID
+6. Device plugin validates and returns device info (env vars, mounts)
+7. Pod starts with VIDEO_DEVICE=/dev/video10
+8. Kubernetes manages device lifecycle automatically
+9. Device plugin monitors health every 30 seconds
 ```
 
 ## 🔧 Key Concepts
@@ -77,17 +78,19 @@ The plugin implements the **Kubernetes Device Plugin API** with these key method
 
 The plugin follows **Kubernetes best practices** for device management:
 
+- **Always report all devices**: ListAndWatch reports all 8 devices as available
 - **Kubelet manages allocation**: Kubelet chooses which device to allocate
-- **Device plugin validates**: Simple validation that device is available
-- **No complex tracking**: Kubernetes handles device lifecycle
-- **Thread-safe allocation**: Mutex-protected device state management
+- **Simple validation**: Basic device existence checking
+- **No allocation tracking**: Kubernetes handles device lifecycle entirely
+- **Per-device health monitoring**: Individual device health status reporting
 
 **Benefits**:
 
-- Follows official Kubernetes device plugin patterns
+- Follows official Kubernetes device plugin patterns (like GPU plugins)
 - No complex pod-to-device mapping needed
 - No additional RBAC permissions required
 - Reliable and maintainable
+- Automatic device isolation between pods
 
 ### 3. V4L2 Device Management
 
@@ -104,27 +107,36 @@ The plugin follows **Kubernetes best practices** for device management:
 Create → Available → Allocate → Use → Available
    ↓         ↓           ↓        ↓        ↓
 Startup   Ready      Pod Req   Pod Run   Ready
+   ↓         ↓           ↓        ↓        ↓
+Health    Health      Health   Health   Health
+Check     Check       Check    Check    Check
 ```
 
-### 4. Simple Device Validation
+### 4. Health Monitoring
 
-**Allocation Process**:
+**Health Check Process**:
 
-- **Kubelet Request**: Kubelet specifies which device to allocate
-- **Validation**: Check if device exists (Kubernetes ensures availability)
-- **Allocation**: Mark device as allocated and return device info
-- **No Cleanup Needed**: Kubernetes handles device lifecycle
+- **Per-Device Monitoring**: Each device is checked individually every 30 seconds
+- **Real-time Reporting**: Kubernetes gets notified immediately when devices become unhealthy
+- **Automatic Recovery**: Healthy devices are automatically reported as available
+- **Detailed Logging**: Health check results are logged with counts
 
-**Allocation Logic**:
+**Health Check Logic**:
 
 ```go
-func AllocateDevice(deviceID string) (*VideoDevice, error) {
-    if !deviceExists(deviceID) {
-        return nil, fmt.Errorf("device not found: %s", deviceID)
+func GetDeviceHealth(deviceID string) bool {
+    device := getDevice(deviceID)
+    return checkDeviceExists(device.Path) && checkDeviceReadable(device.Path)
+}
+
+// In ListAndWatch - reports health status for each device
+for _, device := range allDevices {
+    deviceHealthy := p.v4l2Manager.GetDeviceHealth(device.ID)
+    health := pluginapi.Healthy
+    if !deviceHealthy {
+        health = pluginapi.Unhealthy
     }
-    // Kubernetes ensures the device is available before requesting it
-    device.Allocated = true
-    return device, nil
+    // Send to Kubernetes...
 }
 ```
 
@@ -134,10 +146,11 @@ func AllocateDevice(deviceID string) (*VideoDevice, error) {
 
 - **8 Virtual Devices per Node**: Configurable device count (max 8)
 - **Automatic Device Creation**: v4l2loopback module loading and device setup
-- **Kubernetes-Native Allocation**: Follows official device plugin patterns
-- **Simple Validation**: Basic device availability checking
+- **Kubernetes-Native Allocation**: Follows official device plugin patterns (like GPU plugins)
+- **Per-Device Health Monitoring**: Individual device health status reporting
+- **Real-time Health Updates**: Immediate notification when devices become unhealthy
 - **Thread-Safe Operations**: Mutex-protected device state management
-- **Health Monitoring**: Continuous device availability checking
+- **No Complex Tracking**: Leverages Kubernetes' built-in device management
 
 ### Advanced Features
 
@@ -146,8 +159,8 @@ func AllocateDevice(deviceID string) (*VideoDevice, error) {
 - **Error Handling**: Comprehensive error handling and recovery
 - **Graceful Shutdown**: Proper cleanup on pod termination
 - **Kubelet Restart Recovery**: Automatically detects and re-registers after kubelet restarts
-- **Real-time Updates**: Immediate ListAndWatch updates on device state changes
-- **No Complex Tracking**: Leverages Kubernetes' built-in device management
+- **Health Check Logging**: Detailed logging of healthy/unhealthy device counts
+- **Device Isolation**: Automatic prevention of device conflicts between pods
 
 ## 📋 Prerequisites
 
@@ -333,7 +346,7 @@ subjects:
   namespace: kube-system
 ```
 
-**Note**: No pod permissions needed - Kubernetes handles device lifecycle management.
+**Note**: No pod permissions needed - the simplified architecture lets Kubernetes handle device lifecycle management entirely.
 
 ### 3. Using the Plugin
 
@@ -384,14 +397,17 @@ spec:
 # Check DaemonSet status
 kubectl get daemonset -n kube-system video-device-plugin
 
-# Check pod logs
-kubectl logs -n kube-system -l name=video-device-plugin
+# Check pod logs (look for health check messages)
+kubectl logs -n kube-system -l name=video-device-plugin | grep "Health check completed"
 
 # Check device creation
 kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/video*
 
-# Check device plugin registration
+# Check device plugin registration and health status
 kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | jq
+
+# Check specific device health in logs
+kubectl logs -n kube-system -l name=video-device-plugin | grep "device health check failed"
 ```
 
 ### Common Issues
@@ -403,20 +419,39 @@ kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | jq
 | Permission denied | Missing privileged mode | Ensure `privileged: true` in DaemonSet |
 | Device allocation fails | All devices busy | Check device utilization and scaling |
 | Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
+| Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |
+| Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
 
 ### Logging
 
-The plugin uses structured JSON logging:
+The plugin uses structured JSON logging with health monitoring:
 
 ```json
 {
   "time": "2024-01-15T10:30:00Z",
+  "level": "INFO",
+  "msg": "Found video devices",
+  "device_count": 8,
+  "healthy_count": 7,
+  "unhealthy_count": 1
+}
+
+{
+  "time": "2024-01-15T10:30:15Z",
   "level": "INFO",
   "msg": "Device allocated",
   "device_id": "video10",
   "device_path": "/dev/video10",
   "container_path": "/dev/video10",
   "env_var": "VIDEO_DEVICE=/dev/video10"
+}
+
+{
+  "time": "2024-01-15T10:30:30Z",
+  "level": "WARN",
+  "msg": "Device health check failed",
+  "device_id": "video15",
+  "device_path": "/dev/video15"
 }
 ```
 

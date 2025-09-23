@@ -264,10 +264,6 @@ func generateDeviceID(devicePath string) string {
 	return filepath.Base(devicePath)
 }
 
-// isDeviceAllocated checks if a device is currently allocated
-func isDeviceAllocated(device *VideoDevice) bool {
-	return device != nil && device.Allocated
-}
 
 // getDevicePathFromID generates a device path from a device ID
 func getDevicePathFromID(deviceID string) string {

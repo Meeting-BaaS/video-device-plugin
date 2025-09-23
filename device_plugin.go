@@ -25,7 +25,6 @@ type VideoDevicePlugin struct {
 	stopCh      chan struct{}
 	mu          sync.RWMutex
 	registered  bool
-	updateCh    chan struct{} // Channel to trigger ListAndWatch updates
 }
 
 // NewVideoDevicePlugin creates a new VideoDevicePlugin instance
@@ -36,9 +35,7 @@ func NewVideoDevicePlugin(config *DevicePluginConfig, v4l2Manager V4L2Manager, l
 		logger:      logger,
 		stopCh:      make(chan struct{}),
 		registered:  false,
-		updateCh:    make(chan struct{}, 1), // Buffered channel for immediate updates
 	}
-
 
 	return plugin
 }
@@ -165,13 +162,44 @@ func (p *VideoDevicePlugin) RegisterWithKubelet() error {
 func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
 	p.logger.Debug("ListAndWatch called")
 
+	// Get all devices (always report all available devices)
+	allDevices := p.v4l2Manager.ListAllDevices()
+	
+	var devices []*pluginapi.Device
+	healthyCount := 0
+	for _, device := range allDevices {
+		// Check health of each device individually
+		deviceHealthy := p.v4l2Manager.GetDeviceHealth(device.ID)
+		if deviceHealthy {
+			healthyCount++
+		}
+		
+		health := pluginapi.Healthy
+		if !deviceHealthy {
+			health = pluginapi.Unhealthy
+		}
+		
+		devices = append(devices, &pluginapi.Device{
+			ID:     device.ID,
+			Health: health,
+		})
+	}
+
+	p.logger.Info("Found video devices", 
+		"device_count", len(devices),
+		"healthy_count", healthyCount,
+		"unhealthy_count", len(devices)-healthyCount)
+
 	// Send initial device list
-	if err := p.sendDeviceList(stream); err != nil {
+	response := &pluginapi.ListAndWatchResponse{
+		Devices: devices,
+	}
+	if err := stream.Send(response); err != nil {
 		return err
 	}
 
-	// Watch for changes
-	ticker := time.NewTicker(5 * time.Second)
+	// Simple health monitoring loop (like GPU plugin)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -179,15 +207,39 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 		case <-p.stopCh:
 			p.logger.Debug("ListAndWatch stopping")
 			return nil
-		case <-p.updateCh:
-			// Immediate update triggered by device allocation
-			if err := p.sendDeviceList(stream); err != nil {
-				p.logger.Error("Failed to send device list update", "error", err)
-				return err
-			}
 		case <-ticker.C:
-			// Periodic health check
-			if err := p.sendDeviceList(stream); err != nil {
+			// Periodic health check - send updated device list with per-device health status
+			allDevices := p.v4l2Manager.ListAllDevices()
+			
+			var devices []*pluginapi.Device
+			healthyCount := 0
+			for _, device := range allDevices {
+				// Check health of each device individually
+				deviceHealthy := p.v4l2Manager.GetDeviceHealth(device.ID)
+				if deviceHealthy {
+					healthyCount++
+				}
+				
+				health := pluginapi.Healthy
+				if !deviceHealthy {
+					health = pluginapi.Unhealthy
+				}
+				
+				devices = append(devices, &pluginapi.Device{
+					ID:     device.ID,
+					Health: health,
+				})
+			}
+
+			p.logger.Debug("Health check completed", 
+				"device_count", len(devices),
+				"healthy_count", healthyCount,
+				"unhealthy_count", len(devices)-healthyCount)
+
+			response := &pluginapi.ListAndWatchResponse{
+				Devices: devices,
+			}
+			if err := stream.Send(response); err != nil {
 				p.logger.Error("Failed to send device list", "error", err)
 				return err
 			}
@@ -256,28 +308,6 @@ func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginap
 	return &pluginapi.PreStartContainerResponse{}, nil
 }
 
-// sendDeviceList sends the current device list to the client
-func (p *VideoDevicePlugin) sendDeviceList(stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	allDevices := p.v4l2Manager.ListAllDevices()
-	
-	var devices []*pluginapi.Device
-	for _, device := range allDevices {
-		// Only send unallocated devices to kubelet
-		if !device.Allocated {
-			devices = append(devices, &pluginapi.Device{
-				ID:     device.ID,
-				Health: pluginapi.Healthy,
-			})
-		}
-	}
-
-	response := &pluginapi.ListAndWatchResponse{
-		Devices: devices,
-	}
-
-	p.logger.Debug("Sending device list", "device_count", len(devices))
-	return stream.Send(response)
-}
 
 // allocateContainer allocates devices for a container
 func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRequest) (*pluginapi.ContainerAllocateResponse, error) {
@@ -293,19 +323,10 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 	// Kubelet tells us which device to allocate
 	deviceID := req.DevicesIDs[0] // Kubelet tells us which specific device to allocate
 	
-	// Allocate the specific device requested by kubelet
-	// Kubernetes ensures the device is available before requesting it
-	device, err := p.v4l2Manager.AllocateDevice(deviceID)
+	// Get the device information (no allocation state tracking needed)
+	device, err := p.v4l2Manager.GetDeviceByID(deviceID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to allocate device %s: %w", deviceID, err)
-	}
-
-	// Trigger immediate ListAndWatch update to notify kubelet that device is no longer available
-	select {
-	case p.updateCh <- struct{}{}:
-		p.logger.Debug("Triggered immediate ListAndWatch update")
-	default:
-		p.logger.Debug("ListAndWatch update channel full, will update on next tick")
+		return nil, fmt.Errorf("failed to get device %s: %w", deviceID, err)
 	}
 
 	// Create environment variable
@@ -331,7 +352,6 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 	response := &pluginapi.ContainerAllocateResponse{
 		Devices: devices,
 		Envs:    envVars,
-		// No annotations needed - Kubernetes handles device allocation
 	}
 
 	return response, nil

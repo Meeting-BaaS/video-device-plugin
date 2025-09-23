@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"time"
 )
 
 // v4l2Manager implements the V4L2Manager interface
@@ -63,9 +62,8 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 		
 		// Create device entry
 		device := &VideoDevice{
-			ID:        deviceID,
-			Path:      devicePath,
-			Allocated: false,
+			ID:   deviceID,
+			Path: devicePath,
 		}
 		
 		v.devices[deviceID] = device
@@ -92,25 +90,21 @@ func (v *v4l2Manager) CreateDevices(count int) error {
 }
 
 
-// AllocateDevice allocates a device to a pod
-func (v *v4l2Manager) AllocateDevice(deviceID string) (*VideoDevice, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+// GetDeviceByID returns a device by its ID
+func (v *v4l2Manager) GetDeviceByID(deviceID string) (*VideoDevice, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	
 	device, exists := v.devices[deviceID]
 	if !exists {
 		return nil, fmt.Errorf("device not found: %s", deviceID)
 	}
 	
-	// Kubernetes ensures the device is available before requesting it
-	device.Allocated = true
-	device.AllocatedAt = time.Now()
-	
-	v.logger.Info("Device allocated", 
-		"device_id", device.ID,
-		"device_path", device.Path)
-	
-	return device, nil
+	// Return a copy of the device (no allocation state tracking)
+	return &VideoDevice{
+		ID:   device.ID,
+		Path: device.Path,
+	}, nil
 }
 
 
@@ -125,7 +119,7 @@ func (v *v4l2Manager) IsHealthy() bool {
 		// Check if all devices still exist and are accessible
 		for _, device := range v.devices {
 			if !checkDeviceExists(device.Path) || !checkDeviceReadable(device.Path) {
-				v.logger.Warn("Device is not healthy", "device_id", device.ID)
+				v.logger.Warn("Device is not healthy", "device_id", device.ID, "device_path", device.Path)
 				return false
 			}
 		}
@@ -137,6 +131,7 @@ func (v *v4l2Manager) IsHealthy() bool {
 	for i := 0; i < 8; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", i)
 		if !checkDeviceExists(devicePath) || !checkDeviceReadable(devicePath) {
+			v.logger.Warn("System device is not healthy", "device_path", devicePath)
 			return false
 		}
 	}
@@ -181,7 +176,7 @@ func (v *v4l2Manager) isModuleLoaded() bool {
 
 
 
-// ListAllDevices returns all devices (for debugging)
+// ListAllDevices returns all devices
 func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -189,12 +184,32 @@ func (v *v4l2Manager) ListAllDevices() map[string]*VideoDevice {
 	devices := make(map[string]*VideoDevice)
 	for id, device := range v.devices {
 		devices[id] = &VideoDevice{
-			ID:          device.ID,
-			Path:        device.Path,
-			Allocated:   device.Allocated,
-			AllocatedAt: device.AllocatedAt,
+			ID:   device.ID,
+			Path: device.Path,
 		}
 	}
 	
 	return devices
+}
+
+// GetDeviceHealth returns health status for a specific device
+func (v *v4l2Manager) GetDeviceHealth(deviceID string) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	
+	device, exists := v.devices[deviceID]
+	if !exists {
+		v.logger.Warn("Device not found for health check", "device_id", deviceID)
+		return false
+	}
+	
+	// Check if device exists and is readable
+	healthy := checkDeviceExists(device.Path) && checkDeviceReadable(device.Path)
+	if !healthy {
+		v.logger.Warn("Device health check failed", 
+			"device_id", deviceID, 
+			"device_path", device.Path)
+	}
+	
+	return healthy
 }
