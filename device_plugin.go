@@ -237,28 +237,8 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 			p.logger.Debug("ListAndWatch stopping")
 			return nil
 		case <-ticker.C:
-			// Periodic health check - send updated device list with per-device health status
-			allDevices := p.v4l2Manager.ListAllDevices()
-
-			var devices []*pluginapi.Device
-			healthyCount := 0
-			for _, device := range allDevices {
-				// Check health of each device individually
-				deviceHealthy := p.v4l2Manager.GetDeviceHealth(device.ID)
-				if deviceHealthy {
-					healthyCount++
-				}
-
-				health := pluginapi.Healthy
-				if !deviceHealthy {
-					health = pluginapi.Unhealthy
-				}
-
-				devices = append(devices, &pluginapi.Device{
-					ID:     device.ID,
-					Health: health,
-				})
-			}
+			// Check device capabilities, reload if needed, and return current health status
+			devices, healthyCount := p.checkAndFixDevices()
 
 			p.logger.Debug("Health check completed",
 				"device_count", len(devices),
@@ -437,3 +417,63 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 	}
 }
 
+// checkAndFixDevices checks device capabilities, reloads if needed, and returns current health status
+func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
+	// Get all devices first
+	allDevices := p.v4l2Manager.ListAllDevices()
+
+	// Check capabilities of all devices and identify unhealthy ones
+	var devices []*pluginapi.Device
+	healthyCount := 0
+	var stuckDevices []string
+
+	for _, device := range allDevices {
+		// Check if device has Video Capture capability
+		deviceHealthy := p.v4l2Manager.HasVideoCaptureCapability(device.Path, p.config.VideoCapabilityCheckTimeout)
+		if deviceHealthy {
+			healthyCount++
+		} else {
+			stuckDevices = append(stuckDevices, device.Path)
+		}
+
+		health := pluginapi.Healthy
+		if !deviceHealthy {
+			health = pluginapi.Unhealthy
+		}
+
+		devices = append(devices, &pluginapi.Device{
+			ID:     device.ID,
+			Health: health,
+		})
+	}
+
+	// If any devices are stuck, reload the module to fix them
+	if len(stuckDevices) > 0 {
+		p.logger.Warn("Devices missing Video Capture capability, reloading module",
+			"stuck_devices", stuckDevices,
+			"count", len(stuckDevices))
+
+		if err := p.reloadV4L2Module(); err != nil {
+			p.logger.Error("Failed to reload v4l2 module", "error", err)
+		} else {
+			p.logger.Info("Successfully reloaded v4l2loopback module")
+		}
+	}
+
+	return devices, healthyCount
+}
+
+// reloadV4L2Module reloads the v4l2loopback module using the extracted function
+func (p *VideoDevicePlugin) reloadV4L2Module() error {
+	// Use the extracted function from module_manager.go
+	if err := loadV4L2LoopbackModuleWithParams(p.config, p.logger); err != nil {
+		return fmt.Errorf("failed to reload v4l2loopback module: %w", err)
+	}
+
+	// Recreate devices in manager after module reload
+	if err := p.v4l2Manager.CreateDevices(p.config.MaxDevices); err != nil {
+		return fmt.Errorf("failed to recreate devices after module reload: %w", err)
+	}
+
+	return nil
+}

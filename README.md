@@ -112,33 +112,44 @@ Health    Health      Health   Health   Health
 Check     Check       Check    Check    Check
 ```
 
-### 4. Health Monitoring
+### 4. Health Monitoring & Auto-Recovery
 
-**Health Check Process**:
+**Smart Health Check Process**:
 
-- **Per-Device Monitoring**: Each device is checked individually every 30 seconds
+- **Capability-Based Monitoring**: Each device is checked for Video Capture capability every 30 seconds
+- **Automatic Module Reload**: When devices lose capabilities, v4l2loopback module is automatically reloaded
 - **Real-time Reporting**: Kubernetes gets notified immediately when devices become unhealthy
-- **Automatic Recovery**: Healthy devices are automatically reported as available
-- **Detailed Logging**: Health check results are logged with counts
+- **Self-Healing**: Stuck devices are automatically fixed and become available again
+- **Detailed Logging**: Health check results and recovery actions are logged with counts
 
 **Health Check Logic**:
 
 ```go
-func GetDeviceHealth(deviceID string) bool {
-    device := getDevice(deviceID)
-    return checkDeviceExists(device.Path) && checkDeviceReadable(device.Path)
-}
-
-// In ListAndWatch - reports health status for each device
-for _, device := range allDevices {
-    deviceHealthy := p.v4l2Manager.GetDeviceHealth(device.ID)
-    health := pluginapi.Healthy
-    if !deviceHealthy {
-        health = pluginapi.Unhealthy
+func checkAndFixDevices() ([]*pluginapi.Device, int) {
+    // Check capabilities of all devices
+    for _, device := range allDevices {
+        deviceHealthy := p.v4l2Manager.HasVideoCaptureCapability(device.Path, timeout)
+        if !deviceHealthy {
+            stuckDevices = append(stuckDevices, device.Path)
+        }
     }
-    // Send to Kubernetes...
+    
+    // If any devices are stuck, reload v4l2loopback module
+    if len(stuckDevices) > 0 {
+        p.logger.Warn("Devices missing Video Capture capability, reloading module")
+        p.reloadV4L2Module() // This fixes the stuck devices
+    }
+    
+    return devices, healthyCount
 }
 ```
+
+**Auto-Recovery Benefits**:
+
+- **Prevents "Invalid argument" errors**: Pods never get allocated broken devices
+- **Automatic healing**: Stuck devices are fixed without manual intervention
+- **Zero downtime**: Module reload happens during health checks, not during allocation
+- **Truthful reporting**: Kubelet always gets accurate device health status
 
 ## 🚀 Features
 
@@ -147,7 +158,8 @@ for _, device := range allDevices {
 - **8 Virtual Devices per Node**: Configurable device count (max 8)
 - **Automatic Device Creation**: v4l2loopback module loading and device setup
 - **Kubernetes-Native Allocation**: Follows official device plugin patterns (like GPU plugins)
-- **Per-Device Health Monitoring**: Individual device health status reporting
+- **Smart Health Monitoring**: Video Capture capability checking with 5-second timeouts
+- **Automatic Recovery**: Self-healing when devices get stuck or lose capabilities
 - **Real-time Health Updates**: Immediate notification when devices become unhealthy
 - **Thread-Safe Operations**: Mutex-protected device state management
 - **No Complex Tracking**: Leverages Kubernetes' built-in device management
@@ -220,6 +232,13 @@ V4L2_DEVICE_PERM=0666
 ENABLE_METRICS=false
 METRICS_PORT=8080
 HEALTH_CHECK_INTERVAL=30
+
+# Performance Tuning
+ALLOCATION_TIMEOUT=30
+DEVICE_CREATION_TIMEOUT=60
+SHUTDOWN_TIMEOUT=10
+CLEANUP_TIMEOUT=15
+VIDEO_CAPABILITY_CHECK_TIMEOUT=5
 ```
 
 ### Configuration Details
@@ -232,6 +251,8 @@ HEALTH_CHECK_INTERVAL=30
 | `RESOURCE_NAME` | K8s resource name | meeting-baas.io/video-devices | String |
 | `V4L2_CARD_LABEL` | Device label | MeetingBot_WebCam | String |
 | `V4L2_DEVICE_PERM` | Device permissions (octal) | 0666 | 0600-0777 |
+| `HEALTH_CHECK_INTERVAL` | Health check frequency (seconds) | 30 | 10-300 |
+| `VIDEO_CAPABILITY_CHECK_TIMEOUT` | v4l2-ctl timeout (seconds) | 5 | 1-30 |
 
 ### Security Considerations
 
@@ -446,16 +467,18 @@ kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/v
 | Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
 | Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |
 | Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
+| "Invalid argument" errors in pods | Devices stuck in wrong format | Plugin auto-reloads module, check logs for recovery |
+| Frequent module reloads | System performance issues | Check VIDEO_CAPABILITY_CHECK_TIMEOUT setting |
 
 ### Logging
 
-The plugin uses structured JSON logging with health monitoring:
+The plugin uses structured JSON logging with health monitoring and auto-recovery:
 
 ```json
 {
   "time": "2024-01-15T10:30:00Z",
   "level": "INFO",
-  "msg": "Found video devices",
+  "msg": "Health check completed",
   "device_count": 8,
   "healthy_count": 7,
   "unhealthy_count": 1
@@ -463,6 +486,20 @@ The plugin uses structured JSON logging with health monitoring:
 
 {
   "time": "2024-01-15T10:30:15Z",
+  "level": "WARN",
+  "msg": "Devices missing Video Capture capability, reloading module",
+  "stuck_devices": ["/dev/video15"],
+  "count": 1
+}
+
+{
+  "time": "2024-01-15T10:30:16Z",
+  "level": "INFO",
+  "msg": "Successfully reloaded v4l2loopback module"
+}
+
+{
+  "time": "2024-01-15T10:30:30Z",
   "level": "INFO",
   "msg": "Device allocated",
   "device_id": "video10",
@@ -472,11 +509,11 @@ The plugin uses structured JSON logging with health monitoring:
 }
 
 {
-  "time": "2024-01-15T10:30:30Z",
-  "level": "WARN",
-  "msg": "Device health check failed",
-  "device_id": "video15",
-  "device_path": "/dev/video15"
+  "time": "2024-01-15T10:30:45Z",
+  "level": "ERROR",
+  "msg": "Video capability check timed out",
+  "device": "/dev/video12",
+  "timeout_seconds": 5
 }
 ```
 

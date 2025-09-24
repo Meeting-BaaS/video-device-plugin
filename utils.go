@@ -77,10 +77,11 @@ func loadConfig() *DevicePluginConfig {
 		HealthCheckInterval: getEnvInt("HEALTH_CHECK_INTERVAL", 30),
 
 		// Performance Tuning
-		AllocationTimeout:     getEnvInt("ALLOCATION_TIMEOUT", 30),
-		DeviceCreationTimeout: getEnvInt("DEVICE_CREATION_TIMEOUT", 60),
-		ShutdownTimeout:       getEnvInt("SHUTDOWN_TIMEOUT", 10),
-		CleanupTimeout:        getEnvInt("CLEANUP_TIMEOUT", 15),
+		AllocationTimeout:           getEnvInt("ALLOCATION_TIMEOUT", 30),
+		DeviceCreationTimeout:       getEnvInt("DEVICE_CREATION_TIMEOUT", 60),
+		ShutdownTimeout:             getEnvInt("SHUTDOWN_TIMEOUT", 10),
+		CleanupTimeout:              getEnvInt("CLEANUP_TIMEOUT", 15),
+		VideoCapabilityCheckTimeout: getEnvInt("VIDEO_CAPABILITY_CHECK_TIMEOUT", 5),
 	}
 
 	// Validate MaxDevices - v4l2loopback has a hard limit of 8 devices

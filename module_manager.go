@@ -58,50 +58,8 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 	}
 
 	// Load the v4l2loopback module with our specific parameters
-	// Using video_nr=VideoDeviceStartNumber-{VideoDeviceStartNumber+max_devices-1} to avoid conflicts with system video devices
-	videoNumbers := make([]string, config.MaxDevices)
-	cardLabels := make([]string, config.MaxDevices)
-	exclusiveCaps := make([]string, config.MaxDevices)
-	for i := 0; i < config.MaxDevices; i++ {
-		videoNumbers[i] = fmt.Sprintf("%d", VideoDeviceStartNumber+i)
-		cardLabels[i] = fmt.Sprintf(`"%s"`, config.V4L2CardLabel)
-		exclusiveCaps[i] = fmt.Sprintf("%d", config.V4L2ExclusiveCaps)
-	}
-
-	// Create context with timeout for modprobe command
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "modprobe", "v4l2loopback",
-		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
-		fmt.Sprintf("max_buffers=%d", config.V4L2MaxBuffers),
-		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
-		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
-
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Check if the error is due to timeout
-		if ctx.Err() == context.DeadlineExceeded {
-			logger.Error("Failed to load v4l2loopback module - operation timed out",
-				"timeout_seconds", config.DeviceCreationTimeout)
-			return fmt.Errorf("modprobe timed out after %d seconds: %w", config.DeviceCreationTimeout, err)
-		}
-
-		logger.Error("Failed to load v4l2loopback module")
-		logger.Info("modprobe output", "output", strings.TrimSpace(string(out)))
-
-		// dmesg fallback for additional debugging
-		logger.Info("Checking dmesg for additional error details:")
-		if dmesgOutput, dmesgErr := exec.Command("dmesg").Output(); dmesgErr == nil {
-			lines := strings.Split(string(dmesgOutput), "\n")
-			for i := len(lines) - 10; i < len(lines); i++ {
-				if i >= 0 {
-					logger.Info("   " + lines[i])
-				}
-			}
-		} else {
-			logger.Debug("dmesg not available or restricted", "error", dmesgErr)
-		}
-		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
+	if err := loadV4L2LoopbackModuleWithParams(config, logger); err != nil {
+		return err
 	}
 
 	logger.Info("v4l2loopback module loaded successfully")
@@ -216,6 +174,58 @@ func verifyV4L2Configuration(config *DevicePluginConfig, logger *slog.Logger) er
 		} else {
 			return fmt.Errorf("device %s not found: %w", devicePath, err)
 		}
+	}
+
+	return nil
+}
+
+// loadV4L2LoopbackModuleWithParams loads the v4l2loopback module with specific parameters
+// This function can be called both during startup and during health check reloads
+func loadV4L2LoopbackModuleWithParams(config *DevicePluginConfig, logger *slog.Logger) error {
+	// Using video_nr=VideoDeviceStartNumber-{VideoDeviceStartNumber+max_devices-1} to avoid conflicts with system video devices
+	videoNumbers := make([]string, config.MaxDevices)
+	cardLabels := make([]string, config.MaxDevices)
+	exclusiveCaps := make([]string, config.MaxDevices)
+	for i := 0; i < config.MaxDevices; i++ {
+		videoNumbers[i] = fmt.Sprintf("%d", VideoDeviceStartNumber+i)
+		cardLabels[i] = fmt.Sprintf(`"%s"`, config.V4L2CardLabel)
+		exclusiveCaps[i] = fmt.Sprintf("%d", config.V4L2ExclusiveCaps)
+	}
+
+	// Create context with timeout for modprobe command
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "modprobe", "v4l2loopback",
+		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
+		fmt.Sprintf("max_buffers=%d", config.V4L2MaxBuffers),
+		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
+		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Check if the error is due to timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			logger.Error("Failed to load v4l2loopback module - operation timed out",
+				"timeout_seconds", config.DeviceCreationTimeout)
+			return fmt.Errorf("modprobe timed out after %d seconds: %w", config.DeviceCreationTimeout, err)
+		}
+
+		logger.Error("Failed to load v4l2loopback module")
+		logger.Info("modprobe output", "output", strings.TrimSpace(string(out)))
+
+		// dmesg fallback for additional debugging
+		logger.Info("Checking dmesg for additional error details:")
+		if dmesgOutput, dmesgErr := exec.Command("dmesg").Output(); dmesgErr == nil {
+			lines := strings.Split(string(dmesgOutput), "\n")
+			for i := len(lines) - 10; i < len(lines); i++ {
+				if i >= 0 {
+					logger.Info("   " + lines[i])
+				}
+			}
+		} else {
+			logger.Debug("dmesg not available or restricted", "error", dmesgErr)
+		}
+		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
 	}
 
 	return nil

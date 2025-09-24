@@ -39,10 +39,11 @@ type DevicePluginConfig struct {
 	HealthCheckInterval int  `json:"health_check_interval"` // Health check interval in seconds
 
 	// Performance Tuning
-	AllocationTimeout     int `json:"allocation_timeout"`      // Device allocation timeout in seconds
-	DeviceCreationTimeout int `json:"device_creation_timeout"` // Device creation timeout in seconds
-	ShutdownTimeout       int `json:"shutdown_timeout"`        // Graceful shutdown timeout in seconds
-	CleanupTimeout        int `json:"cleanup_timeout"`         // Module cleanup timeout in seconds
+	AllocationTimeout           int `json:"allocation_timeout"`             // Device allocation timeout in seconds
+	DeviceCreationTimeout       int `json:"device_creation_timeout"`        // Device creation timeout in seconds
+	ShutdownTimeout             int `json:"shutdown_timeout"`               // Graceful shutdown timeout in seconds
+	CleanupTimeout              int `json:"cleanup_timeout"`                // Module cleanup timeout in seconds
+	VideoCapabilityCheckTimeout int `json:"video_capability_check_timeout"` // Video capability check timeout in seconds
 }
 
 // V4L2Manager interface for managing V4L2 devices
@@ -64,6 +65,13 @@ type V4L2Manager interface {
 
 	// GetDeviceHealth returns health status for a specific device
 	GetDeviceHealth(deviceID string) bool
+
+	// HasVideoCaptureCapability checks if a device has Video Capture capability
+	HasVideoCaptureCapability(devicePath string, timeoutSeconds int) bool
+
+	// CheckAllDevicesCapabilities checks all devices for Video Capture capability
+	// Returns a list of devices that are missing the capability
+	CheckAllDevicesCapabilities(maxDevices int, timeoutSeconds int) []string
 }
 
 // DevicePluginServer interface for the gRPC device plugin server

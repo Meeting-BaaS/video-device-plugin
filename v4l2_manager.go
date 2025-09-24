@@ -1,18 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
+	"time"
 )
 
 // v4l2Manager implements the V4L2Manager interface
 type v4l2Manager struct {
-	devices    map[string]*VideoDevice
-	logger     *slog.Logger
-	mu         sync.RWMutex
-	perm       os.FileMode
+	devices map[string]*VideoDevice
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	perm    os.FileMode
 }
 
 // NewV4L2Manager creates a new V4L2Manager instance
@@ -192,4 +196,38 @@ func (v *v4l2Manager) GetDeviceHealth(deviceID string) bool {
 	}
 
 	return healthy
+}
+
+// HasVideoCaptureCapability checks if a device has Video Capture capability
+func (v *v4l2Manager) HasVideoCaptureCapability(devicePath string, timeoutSeconds int) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "v4l2-ctl", "--device", devicePath, "--info")
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			v.logger.Error("Video capability check timed out", "device", devicePath, "timeout_seconds", timeoutSeconds)
+		} else {
+			v.logger.Error("Failed to check device capabilities", "device", devicePath, "error", err)
+		}
+		return false
+	}
+
+	return strings.Contains(string(output), "Video Capture")
+}
+
+// CheckAllDevicesCapabilities checks all devices for Video Capture capability
+// Returns a list of devices that are missing the capability
+func (v *v4l2Manager) CheckAllDevicesCapabilities(maxDevices int, timeoutSeconds int) []string {
+	var stuckDevices []string
+
+	for i := 0; i < maxDevices; i++ {
+		devicePath := fmt.Sprintf("/dev/video%d", VideoDeviceStartNumber+i)
+		if !v.HasVideoCaptureCapability(devicePath, timeoutSeconds) {
+			stuckDevices = append(stuckDevices, devicePath)
+		}
+	}
+
+	return stuckDevices
 }
