@@ -132,6 +132,23 @@ func validateConfig(config *DevicePluginConfig) error {
 		return fmt.Errorf("HEALTH_CHECK_INTERVAL must be > 0 seconds, got %d", config.HealthCheckInterval)
 	}
 
+	// Validate timeouts
+	if config.AllocationTimeout <= 0 {
+		return fmt.Errorf("ALLOCATION_TIMEOUT must be > 0 seconds, got %d", config.AllocationTimeout)
+	}
+	if config.DeviceCreationTimeout <= 0 {
+		return fmt.Errorf("DEVICE_CREATION_TIMEOUT must be > 0 seconds, got %d", config.DeviceCreationTimeout)
+	}
+	if config.ShutdownTimeout <= 0 {
+		return fmt.Errorf("SHUTDOWN_TIMEOUT must be > 0 seconds, got %d", config.ShutdownTimeout)
+	}
+	if config.CleanupTimeout <= 0 {
+		return fmt.Errorf("CLEANUP_TIMEOUT must be > 0 seconds, got %d", config.CleanupTimeout)
+	}
+	if config.VideoCapabilityCheckTimeout <= 0 {
+		return fmt.Errorf("VIDEO_CAPABILITY_CHECK_TIMEOUT must be > 0 seconds, got %d", config.VideoCapabilityCheckTimeout)
+	}
+
 	if config.V4L2DevicePerm < 0 || config.V4L2DevicePerm > 0777 {
 		return fmt.Errorf("V4L2_DEVICE_PERM must be 0000-0777, got %o", config.V4L2DevicePerm)
 	}
