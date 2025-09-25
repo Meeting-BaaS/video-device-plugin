@@ -448,31 +448,25 @@ func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
 		})
 	}
 
-	// If any devices are stuck, report them as unhealthy and schedule exit
+	// If any devices are stuck, schedule graceful exit for DaemonSet restart
 	if len(stuckDevices) > 0 {
-		p.logger.Error("Devices missing Video capability, reporting as unhealthy and scheduling restart",
+		p.logger.Error("Devices missing Video capability, scheduling graceful restart",
 			"stuck_devices", stuckDevices,
 			"count", len(stuckDevices),
-			"reason", "Device recovery failed - will restart plugin pod")
+			"reason", "Device recovery needed - will restart plugin pod")
 
-		// Mark all devices as unhealthy so kubelet knows they're not available
-		for i := range devices {
-			devices[i].Health = pluginapi.Unhealthy
-		}
-		healthyCount = 0
-
-		// Schedule exit after a short delay to let kubelet process the state change
+		// Schedule graceful exit after a short delay
 		go func() {
 			time.Sleep(5 * time.Second)
-			p.logger.Info("Exiting plugin for DaemonSet restart after reporting unhealthy devices")
-
+			p.logger.Info("Exiting plugin gracefully for DaemonSet restart")
+			
 			// Cleanup before exit since os.Exit() doesn't trigger defer statements
 			p.logger.Info("Performing cleanup before exit")
 			if err := p.Stop(); err != nil {
 				p.logger.Error("Error during cleanup before exit", "error", err)
 			}
-
-			os.Exit(1)
+			
+			os.Exit(0)  // Exit gracefully to avoid CrashLoopBackOff
 		}()
 	}
 
