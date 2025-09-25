@@ -447,33 +447,20 @@ func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
 		})
 	}
 
-	// If any devices are stuck, reload the module to fix them
+	// If any devices are stuck, try to heal them
 	if len(stuckDevices) > 0 {
-		p.logger.Warn("Devices missing Video capability, reloading module",
+		p.logger.Warn("Devices missing Video capability, attempting recovery",
 			"stuck_devices", stuckDevices,
 			"count", len(stuckDevices))
 
-		if err := p.reloadV4L2Module(); err != nil {
-			p.logger.Error("Failed to reload v4l2 module", "error", err)
+		// Load videodev module to heal stuck devices
+		if err := loadVideodevModule(p.config, p.logger); err != nil {
+			p.logger.Error("Failed to load videodev module for recovery", "error", err)
 		} else {
-			p.logger.Info("Successfully reloaded v4l2loopback module")
+			p.logger.Info("Successfully loaded videodev module for recovery")
 		}
 	}
 
 	return devices, healthyCount
 }
 
-// reloadV4L2Module reloads the v4l2loopback module using the extracted function
-func (p *VideoDevicePlugin) reloadV4L2Module() error {
-	// Use the extracted function from module_manager.go
-	if err := loadV4L2LoopbackModuleWithParams(p.config, p.logger); err != nil {
-		return fmt.Errorf("failed to reload v4l2loopback module: %w", err)
-	}
-
-	// Recreate devices in manager after module reload
-	if err := p.v4l2Manager.CreateDevices(p.config.MaxDevices); err != nil {
-		return fmt.Errorf("failed to recreate devices after module reload: %w", err)
-	}
-
-	return nil
-}

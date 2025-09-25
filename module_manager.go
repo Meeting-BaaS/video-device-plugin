@@ -37,24 +37,8 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 	}
 
 	// CRITICAL: Load videodev module first (required for v4l2loopback)
-	logger.Info("Loading videodev module (required for v4l2loopback)...")
-	vctx, vcancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
-	defer vcancel()
-	if out, err := exec.CommandContext(vctx, "modprobe", "videodev").CombinedOutput(); err != nil {
-		logger.Error("Failed to load videodev module - this is required for v4l2loopback", "error", err, "output", strings.TrimSpace(string(out)))
-		logger.Info("Make sure linux-modules-extra-$(uname -r) is installed")
-		return fmt.Errorf("failed to load videodev module: %w", err)
-	}
-
-	// Verify videodev is loaded
-	if loaded, err := isModuleLoaded("videodev"); err != nil {
-		logger.Error("Failed to check videodev module status", "error", err)
-		return fmt.Errorf("failed to check videodev module: %w", err)
-	} else if !loaded {
-		logger.Error("ERROR: videodev module is not loaded - v4l2loopback will fail")
-		return fmt.Errorf("videodev module not loaded")
-	} else {
-		logger.Info("videodev module loaded successfully")
+	if err := loadVideodevModule(config, logger); err != nil {
+		return err
 	}
 
 	// Load the v4l2loopback module with our specific parameters
@@ -226,6 +210,32 @@ func loadV4L2LoopbackModuleWithParams(config *DevicePluginConfig, logger *slog.L
 			logger.Debug("dmesg not available or restricted", "error", dmesgErr)
 		}
 		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
+	}
+
+	return nil
+}
+
+// loadVideodevModule loads the videodev module (required for v4l2loopback)
+// This function can be called both during startup and during recovery
+func loadVideodevModule(config *DevicePluginConfig, logger *slog.Logger) error {
+	logger.Info("Loading videodev module (required for v4l2loopback)...")
+	vctx, vcancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
+	defer vcancel()
+	if out, err := exec.CommandContext(vctx, "modprobe", "videodev").CombinedOutput(); err != nil {
+		logger.Error("Failed to load videodev module - this is required for v4l2loopback", "error", err, "output", strings.TrimSpace(string(out)))
+		logger.Info("Make sure linux-modules-extra-$(uname -r) is installed")
+		return fmt.Errorf("failed to load videodev module: %w", err)
+	}
+
+	// Verify videodev is loaded
+	if loaded, err := isModuleLoaded("videodev"); err != nil {
+		logger.Error("Failed to check videodev module status", "error", err)
+		return fmt.Errorf("failed to check videodev module: %w", err)
+	} else if !loaded {
+		logger.Error("ERROR: videodev module is not loaded - v4l2loopback will fail")
+		return fmt.Errorf("videodev module not loaded")
+	} else {
+		logger.Info("videodev module loaded successfully")
 	}
 
 	return nil

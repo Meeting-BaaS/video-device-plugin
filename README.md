@@ -116,8 +116,8 @@ Check     Check       Check    Check    Check
 
 **Smart Health Check Process**:
 
-- **Capability-Based Monitoring**: Each device is checked for Video Capture capability every 30 seconds
-- **Automatic Module Reload**: When devices lose capabilities, v4l2loopback module is automatically reloaded
+- **Capability-Based Monitoring**: Each device is checked for Video Capture or Video Output capability every 30 seconds
+- **Automatic Recovery**: When devices lose capabilities, videodev module is automatically loaded to heal them
 - **Real-time Reporting**: Kubernetes gets notified immediately when devices become unhealthy
 - **Self-Healing**: Stuck devices are automatically fixed and become available again
 - **Detailed Logging**: Health check results and recovery actions are logged with counts
@@ -128,16 +128,16 @@ Check     Check       Check    Check    Check
 func checkAndFixDevices() ([]*pluginapi.Device, int) {
     // Check capabilities of all devices
     for _, device := range allDevices {
-        deviceHealthy := p.v4l2Manager.HasVideoCaptureCapability(device.Path, timeout)
+        deviceHealthy := p.v4l2Manager.HasVideoCapability(device.Path, timeout)
         if !deviceHealthy {
             stuckDevices = append(stuckDevices, device.Path)
         }
     }
     
-    // If any devices are stuck, reload v4l2loopback module
+    // If any devices are stuck, load videodev module to heal them
     if len(stuckDevices) > 0 {
-        p.logger.Warn("Devices missing Video Capture capability, reloading module")
-        p.reloadV4L2Module() // This fixes the stuck devices
+        p.logger.Warn("Devices missing Video capability, attempting recovery")
+        loadVideodevModule(config, logger) // This heals the stuck devices
     }
     
     return devices, healthyCount
@@ -148,7 +148,7 @@ func checkAndFixDevices() ([]*pluginapi.Device, int) {
 
 - **Prevents "Invalid argument" errors**: Pods never get allocated broken devices
 - **Automatic healing**: Stuck devices are fixed without manual intervention
-- **Zero downtime**: Module reload happens during health checks, not during allocation
+- **Zero downtime**: Recovery happens during health checks, not during allocation
 - **Truthful reporting**: Kubelet always gets accurate device health status
 
 ## 🚀 Features
@@ -158,7 +158,7 @@ func checkAndFixDevices() ([]*pluginapi.Device, int) {
 - **8 Virtual Devices per Node**: Configurable device count (max 8)
 - **Automatic Device Creation**: v4l2loopback module loading and device setup
 - **Kubernetes-Native Allocation**: Follows official device plugin patterns (like GPU plugins)
-- **Smart Health Monitoring**: Video Capture capability checking with 5-second timeouts
+- **Smart Health Monitoring**: Video capability checking (Capture or Output) with 5-second timeouts
 - **Automatic Recovery**: Self-healing when devices get stuck or lose capabilities
 - **Real-time Health Updates**: Immediate notification when devices become unhealthy
 - **Thread-Safe Operations**: Mutex-protected device state management
@@ -467,8 +467,8 @@ kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/v
 | Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
 | Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |
 | Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
-| "Invalid argument" errors in pods | Devices stuck in wrong format | Plugin auto-reloads module, check logs for recovery |
-| Frequent module reloads | System performance issues | Check VIDEO_CAPABILITY_CHECK_TIMEOUT setting |
+| "Invalid argument" errors in pods | Devices stuck in wrong format | Plugin auto-loads videodev module, check logs for recovery |
+| Frequent recovery attempts | System performance issues | Check VIDEO_CAPABILITY_CHECK_TIMEOUT setting |
 
 ### Logging
 
@@ -487,7 +487,7 @@ The plugin uses structured JSON logging with health monitoring and auto-recovery
 {
   "time": "2024-01-15T10:30:15Z",
   "level": "WARN",
-  "msg": "Devices missing Video Capture capability, reloading module",
+  "msg": "Devices missing Video capability, attempting recovery",
   "stuck_devices": ["/dev/video15"],
   "count": 1
 }
@@ -495,7 +495,7 @@ The plugin uses structured JSON logging with health monitoring and auto-recovery
 {
   "time": "2024-01-15T10:30:16Z",
   "level": "INFO",
-  "msg": "Successfully reloaded v4l2loopback module"
+  "msg": "Successfully loaded videodev module for recovery"
 }
 
 {
