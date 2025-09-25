@@ -198,8 +198,8 @@ func (v *v4l2Manager) GetDeviceHealth(deviceID string) bool {
 	return healthy
 }
 
-// HasVideoCaptureCapability checks if a device has Video Capture capability
-func (v *v4l2Manager) HasVideoCaptureCapability(devicePath string, timeoutSeconds int) bool {
+// HasVideoCapability checks if a device has Video Capture or Video Output capability
+func (v *v4l2Manager) HasVideoCapability(devicePath string, timeoutSeconds int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -214,17 +214,18 @@ func (v *v4l2Manager) HasVideoCaptureCapability(devicePath string, timeoutSecond
 		return false
 	}
 
-	return strings.Contains(string(output), "Video Capture")
+	outputStr := string(output)
+	return strings.Contains(outputStr, "Video Capture") || strings.Contains(outputStr, "Video Output")
 }
 
-// CheckAllDevicesCapabilities checks all devices for Video Capture capability
+// CheckAllDevicesCapabilities checks all devices for Video Capture or Video Output capability
 // Returns a list of devices that are missing the capability
 func (v *v4l2Manager) CheckAllDevicesCapabilities(maxDevices int, timeoutSeconds int) []string {
 	var stuckDevices []string
 
 	for i := 0; i < maxDevices; i++ {
 		devicePath := fmt.Sprintf("/dev/video%d", VideoDeviceStartNumber+i)
-		if !v.HasVideoCaptureCapability(devicePath, timeoutSeconds) {
+		if !v.HasVideoCapability(devicePath, timeoutSeconds) {
 			stuckDevices = append(stuckDevices, devicePath)
 		}
 	}

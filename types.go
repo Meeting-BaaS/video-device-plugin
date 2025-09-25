@@ -66,10 +66,10 @@ type V4L2Manager interface {
 	// GetDeviceHealth returns health status for a specific device
 	GetDeviceHealth(deviceID string) bool
 
-	// HasVideoCaptureCapability checks if a device has Video Capture capability
-	HasVideoCaptureCapability(devicePath string, timeoutSeconds int) bool
+	// HasVideoCapability checks if a device has Video Capture or Video Output capability
+	HasVideoCapability(devicePath string, timeoutSeconds int) bool
 
-	// CheckAllDevicesCapabilities checks all devices for Video Capture capability
+	// CheckAllDevicesCapabilities checks all devices for Video Capture or Video Output capability
 	// Returns a list of devices that are missing the capability
 	CheckAllDevicesCapabilities(maxDevices int, timeoutSeconds int) []string
 }

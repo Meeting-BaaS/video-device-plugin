@@ -428,8 +428,8 @@ func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
 	var stuckDevices []string
 
 	for _, device := range allDevices {
-		// Check if device has Video Capture capability
-		deviceHealthy := p.v4l2Manager.HasVideoCaptureCapability(device.Path, p.config.VideoCapabilityCheckTimeout)
+		// Check if device has Video Capture or Video Output capability
+		deviceHealthy := p.v4l2Manager.HasVideoCapability(device.Path, p.config.VideoCapabilityCheckTimeout)
 		if deviceHealthy {
 			healthyCount++
 		} else {
@@ -449,7 +449,7 @@ func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
 
 	// If any devices are stuck, reload the module to fix them
 	if len(stuckDevices) > 0 {
-		p.logger.Warn("Devices missing Video Capture capability, reloading module",
+		p.logger.Warn("Devices missing Video capability, reloading module",
 			"stuck_devices", stuckDevices,
 			"count", len(stuckDevices))
 
