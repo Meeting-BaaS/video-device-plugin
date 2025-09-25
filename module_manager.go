@@ -16,12 +16,12 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 
 	// Check if module is already loaded and verify configuration
 	if loaded, err := isModuleLoaded("v4l2loopback"); err == nil && loaded {
-		logger.Info("v4l2loopback module already loaded, verifying configuration...")
+		logger.Debug("v4l2loopback module already loaded, verifying configuration...")
 
 		// Check if the current device configuration matches our requirements
 		if err := verifyV4L2Configuration(config, logger); err != nil {
 			logger.Warn("v4l2loopback configuration mismatch detected", "error", err)
-			logger.Info("Reloading v4l2loopback module with correct configuration...")
+			logger.Debug("Reloading v4l2loopback module with correct configuration...")
 
 			// Unload the module first (time-bounded)
 			unloadCtx, unloadCancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
@@ -31,7 +31,7 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 				// Continue anyway, modprobe might handle the reload
 			}
 		} else {
-			logger.Info("v4l2loopback configuration matches requirements")
+			logger.Debug("v4l2loopback configuration matches requirements")
 			return nil
 		}
 	}
@@ -198,7 +198,7 @@ func loadV4L2LoopbackModuleWithParams(config *DevicePluginConfig, logger *slog.L
 		logger.Info("modprobe output", "output", strings.TrimSpace(string(out)))
 
 		// dmesg fallback for additional debugging
-		logger.Info("Checking dmesg for additional error details:")
+		logger.Debug("Checking dmesg for additional error details:")
 		if dmesgOutput, dmesgErr := exec.Command("dmesg").Output(); dmesgErr == nil {
 			lines := strings.Split(string(dmesgOutput), "\n")
 			for i := len(lines) - 10; i < len(lines); i++ {
@@ -218,12 +218,12 @@ func loadV4L2LoopbackModuleWithParams(config *DevicePluginConfig, logger *slog.L
 // loadVideodevModule loads the videodev module (required for v4l2loopback)
 // This function can be called both during startup and during recovery
 func loadVideodevModule(config *DevicePluginConfig, logger *slog.Logger) error {
-	logger.Info("Loading videodev module (required for v4l2loopback)...")
+	logger.Debug("Loading videodev module (required for v4l2loopback)...")
 	vctx, vcancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
 	defer vcancel()
 	if out, err := exec.CommandContext(vctx, "modprobe", "videodev").CombinedOutput(); err != nil {
 		logger.Error("Failed to load videodev module - this is required for v4l2loopback", "error", err, "output", strings.TrimSpace(string(out)))
-		logger.Info("Make sure linux-modules-extra-$(uname -r) is installed")
+		logger.Debug("Make sure linux-modules-extra-$(uname -r) is installed")
 		return fmt.Errorf("failed to load videodev module: %w", err)
 	}
 
@@ -235,7 +235,7 @@ func loadVideodevModule(config *DevicePluginConfig, logger *slog.Logger) error {
 		logger.Error("ERROR: videodev module is not loaded - v4l2loopback will fail")
 		return fmt.Errorf("videodev module not loaded")
 	} else {
-		logger.Info("videodev module loaded successfully")
+		logger.Debug("videodev module loaded successfully")
 	}
 
 	return nil

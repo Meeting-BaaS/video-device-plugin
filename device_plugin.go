@@ -453,11 +453,11 @@ func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
 			"stuck_devices", stuckDevices,
 			"count", len(stuckDevices))
 
-		// Load videodev module to heal stuck devices
-		if err := loadVideodevModule(p.config, p.logger); err != nil {
-			p.logger.Error("Failed to load videodev module for recovery", "error", err)
+		// Reload v4l2loopback module to heal stuck devices
+		if err := loadV4L2LoopbackModule(p.config, p.logger); err != nil {
+			p.logger.Error("Failed to reload v4l2loopback module for recovery", "error", err)
 		} else {
-			p.logger.Info("Successfully loaded videodev module for recovery")
+			p.logger.Info("Successfully reloaded v4l2loopback module for recovery")
 		}
 	}
 
