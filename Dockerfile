@@ -34,8 +34,8 @@ RUN apt-get update && \
     apt-get upgrade --yes && \
     apt-get --allow-downgrades --no-install-recommends --yes install \
     kmod \
-    linux-modules-extra-6.8.0-64-generic \
-    linux-headers-6.8.0-64-generic \
+    linux-modules-extra-6.8.0-84-generic \
+    linux-headers-6.8.0-84-generic \
     v4l2loopback-dkms \
     v4l2loopback-utils \
     v4l-utils \
