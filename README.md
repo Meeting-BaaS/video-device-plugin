@@ -117,9 +117,9 @@ Check     Check       Check    Check    Check
 **Smart Health Check Process**:
 
 - **Capability-Based Monitoring**: Each device is checked for Video Capture or Video Output capability every 30 seconds
-- **Automatic Recovery**: When devices lose capabilities, videodev module is automatically loaded to heal them
+- **Automatic Recovery**: When devices lose capabilities, the plugin exits and triggers DaemonSet restart
 - **Real-time Reporting**: Kubernetes gets notified immediately when devices become unhealthy
-- **Self-Healing**: Stuck devices are automatically fixed and become available again
+- **Self-Healing**: Stuck devices are automatically fixed by pod restart with fresh devices
 - **Detailed Logging**: Health check results and recovery actions are logged with counts
 
 **Health Check Logic**:
@@ -134,10 +134,10 @@ func checkAndFixDevices() ([]*pluginapi.Device, int) {
         }
     }
     
-    // If any devices are stuck, load videodev module to heal them
+    // If any devices are stuck, exit plugin to trigger DaemonSet restart
     if len(stuckDevices) > 0 {
-        p.logger.Warn("Devices missing Video capability, attempting recovery")
-        loadVideodevModule(config, logger) // This heals the stuck devices
+        p.logger.Error("Devices missing Video capability, exiting plugin for DaemonSet restart")
+        os.Exit(1) // DaemonSet will restart the pod with fresh devices
     }
     
     return devices, healthyCount
@@ -146,8 +146,10 @@ func checkAndFixDevices() ([]*pluginapi.Device, int) {
 
 **Auto-Recovery Benefits**:
 
+- **100% Reliable**: Fresh pod = fresh devices, guaranteed to work
+- **Kubernetes Native**: Uses standard DaemonSet restart mechanism
 - **Prevents "Invalid argument" errors**: Pods never get allocated broken devices
-- **Automatic healing**: Stuck devices are fixed without manual intervention
+- **Automatic healing**: Stuck devices are fixed by pod restart without manual intervention
 - **Zero downtime**: Recovery happens during health checks, not during allocation
 - **Truthful reporting**: Kubelet always gets accurate device health status
 
@@ -159,7 +161,7 @@ func checkAndFixDevices() ([]*pluginapi.Device, int) {
 - **Automatic Device Creation**: v4l2loopback module loading and device setup
 - **Kubernetes-Native Allocation**: Follows official device plugin patterns (like GPU plugins)
 - **Smart Health Monitoring**: Video capability checking (Capture or Output) with 5-second timeouts
-- **Automatic Recovery**: Self-healing when devices get stuck or lose capabilities
+- **Automatic Recovery**: Self-healing via DaemonSet restart when devices get stuck or lose capabilities
 - **Real-time Health Updates**: Immediate notification when devices become unhealthy
 - **Thread-Safe Operations**: Mutex-protected device state management
 - **No Complex Tracking**: Leverages Kubernetes' built-in device management
@@ -302,6 +304,7 @@ spec:
       labels:
         name: video-device-plugin
     spec:
+      restartPolicy: Always  # Required for auto-recovery via pod restart
       serviceAccountName: video-device-plugin
       hostNetwork: true
       hostPID: true
@@ -467,8 +470,8 @@ kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/v
 | Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
 | Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |
 | Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
-| "Invalid argument" errors in pods | Devices stuck in wrong format | Plugin auto-loads videodev module, check logs for recovery |
-| Frequent recovery attempts | System performance issues | Check VIDEO_CAPABILITY_CHECK_TIMEOUT setting |
+| "Invalid argument" errors in pods | Devices stuck in wrong format | Plugin exits and DaemonSet restarts pod with fresh devices |
+| Frequent pod restarts | System performance issues | Check VIDEO_CAPABILITY_CHECK_TIMEOUT setting and device health |
 
 ### Logging
 
@@ -486,16 +489,11 @@ The plugin uses structured JSON logging with health monitoring and auto-recovery
 
 {
   "time": "2024-01-15T10:30:15Z",
-  "level": "WARN",
-  "msg": "Devices missing Video capability, attempting recovery",
+  "level": "ERROR",
+  "msg": "Devices missing Video capability, exiting plugin for DaemonSet restart",
   "stuck_devices": ["/dev/video15"],
-  "count": 1
-}
-
-{
-  "time": "2024-01-15T10:30:16Z",
-  "level": "INFO",
-  "msg": "Successfully loaded videodev module for recovery"
+  "count": 1,
+  "reason": "Device recovery failed - restarting plugin pod"
 }
 
 {

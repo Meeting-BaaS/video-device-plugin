@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -447,20 +448,33 @@ func (p *VideoDevicePlugin) checkAndFixDevices() ([]*pluginapi.Device, int) {
 		})
 	}
 
-	// If any devices are stuck, try to heal them
+	// If any devices are stuck, report them as unhealthy and schedule exit
 	if len(stuckDevices) > 0 {
-		p.logger.Warn("Devices missing Video capability, attempting recovery",
+		p.logger.Error("Devices missing Video capability, reporting as unhealthy and scheduling restart",
 			"stuck_devices", stuckDevices,
-			"count", len(stuckDevices))
+			"count", len(stuckDevices),
+			"reason", "Device recovery failed - will restart plugin pod")
 
-		// Reload v4l2loopback module to heal stuck devices
-		if err := loadV4L2LoopbackModule(p.config, p.logger); err != nil {
-			p.logger.Error("Failed to reload v4l2loopback module for recovery", "error", err)
-		} else {
-			p.logger.Info("Successfully reloaded v4l2loopback module for recovery")
+		// Mark all devices as unhealthy so kubelet knows they're not available
+		for i := range devices {
+			devices[i].Health = pluginapi.Unhealthy
 		}
+		healthyCount = 0
+
+		// Schedule exit after a short delay to let kubelet process the state change
+		go func() {
+			time.Sleep(5 * time.Second)
+			p.logger.Info("Exiting plugin for DaemonSet restart after reporting unhealthy devices")
+
+			// Cleanup before exit since os.Exit() doesn't trigger defer statements
+			p.logger.Info("Performing cleanup before exit")
+			if err := p.Stop(); err != nil {
+				p.logger.Error("Error during cleanup before exit", "error", err)
+			}
+
+			os.Exit(1)
+		}()
 	}
 
 	return devices, healthyCount
 }
-
