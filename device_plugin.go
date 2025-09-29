@@ -260,10 +260,17 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 				})
 			}
 
-			p.logger.Debug("Health check completed",
-				"device_count", len(devices),
-				"healthy_count", healthyCount,
-				"unhealthy_count", len(devices)-healthyCount)
+			// Log detailed health status
+			if healthyCount != len(devices) {
+				p.logger.Warn("Health check completed with unhealthy devices",
+					"device_count", len(devices),
+					"healthy_count", healthyCount,
+					"unhealthy_count", len(devices)-healthyCount)
+			} else {
+				p.logger.Debug("Health check completed - all devices healthy",
+					"device_count", len(devices),
+					"healthy_count", healthyCount)
+			}
 
 			response := &pluginapi.ListAndWatchResponse{
 				Devices: devices,
@@ -436,4 +443,3 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 		// label target for goto to resume outer loop
 	}
 }
-

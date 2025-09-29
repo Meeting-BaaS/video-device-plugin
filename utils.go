@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -208,6 +209,22 @@ func checkDeviceReadable(path string) bool {
 		_ = file.Close() // Ignore close error for device readability check
 	}()
 	return true
+}
+
+// checkV4L2DeviceFormat checks if a V4L2 device can provide format information
+func checkV4L2DeviceFormat(devicePath string) bool {
+	// Use v4l2-ctl to check if the device can provide format information
+	cmd := exec.Command("v4l2-ctl", "--device="+devicePath, "--get-fmt-video")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// If v4l2-ctl fails, the device is not healthy
+		return false
+	}
+
+	// Check if the output contains valid format information
+	// A healthy device should return format details, not just empty output
+	outputStr := strings.TrimSpace(string(output))
+	return len(outputStr) > 0 && !strings.Contains(outputStr, "VIDIOC_G_FMT: failed")
 }
 
 // setupSignalHandling sets up signal handling for graceful shutdown

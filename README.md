@@ -120,13 +120,25 @@ Check     Check       Check    Check    Check
 - **Real-time Reporting**: Kubernetes gets notified immediately when devices become unhealthy
 - **Automatic Recovery**: Healthy devices are automatically reported as available
 - **Detailed Logging**: Health check results are logged with counts
+- **V4L2 Format Validation**: Uses `v4l2-ctl --get-fmt-video` to detect broken devices
 
 **Health Check Logic**:
 
 ```go
 func GetDeviceHealth(deviceID string) bool {
     device := getDevice(deviceID)
-    return checkDeviceExists(device.Path) && checkDeviceReadable(device.Path)
+    
+    // Basic checks: device exists and is readable
+    if !checkDeviceExists(device.Path) || !checkDeviceReadable(device.Path) {
+        return false
+    }
+    
+    // V4L2 format check: ensure device can provide format information
+    if !checkV4L2DeviceFormat(device.Path) {
+        return false
+    }
+    
+    return true
 }
 
 // In ListAndWatch - reports health status for each device
@@ -139,6 +151,14 @@ for _, device := range allDevices {
     // Send to Kubernetes...
 }
 ```
+
+**V4L2 Format Check**:
+
+- **Format Validation**: `v4l2-ctl --device=/dev/videoX --get-fmt-video`
+- **Detects Broken Devices**: Identifies devices that exist but fail V4L2 operations
+- **Prevents Allocation**: Broken devices are not reported as available to Kubernetes
+
+This helps identify devices that appear to exist but fail V4L2 operations (like the `VIDIOC_G_FMT: failed: Invalid argument` error you encountered).
 
 ## 🚀 Features
 

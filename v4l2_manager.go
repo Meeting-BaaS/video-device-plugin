@@ -9,10 +9,10 @@ import (
 
 // v4l2Manager implements the V4L2Manager interface
 type v4l2Manager struct {
-	devices    map[string]*VideoDevice
-	logger     *slog.Logger
-	mu         sync.RWMutex
-	perm       os.FileMode
+	devices map[string]*VideoDevice
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	perm    os.FileMode
 }
 
 // NewV4L2Manager creates a new V4L2Manager instance
@@ -183,13 +183,25 @@ func (v *v4l2Manager) GetDeviceHealth(deviceID string) bool {
 		return false
 	}
 
-	// Check if device exists and is readable
-	healthy := checkDeviceExists(device.Path) && checkDeviceReadable(device.Path)
-	if !healthy {
-		v.logger.Warn("Device health check failed",
+	// Basic checks: device exists and is readable
+	if !checkDeviceExists(device.Path) || !checkDeviceReadable(device.Path) {
+		v.logger.Warn("Device health check failed - basic checks",
 			"device_id", deviceID,
 			"device_path", device.Path)
+		return false
 	}
 
-	return healthy
+	// V4L2 format check: ensure device can provide format information
+	if !checkV4L2DeviceFormat(device.Path) {
+		v.logger.Warn("Device health check failed - V4L2 format check",
+			"device_id", deviceID,
+			"device_path", device.Path)
+		return false
+	}
+
+	v.logger.Debug("Device health check passed",
+		"device_id", deviceID,
+		"device_path", device.Path)
+
+	return true
 }
