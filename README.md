@@ -167,7 +167,7 @@ for _, device := range allDevices {
 ### System Requirements
 
 - **Operating System**: Ubuntu 24.04 LTS
-- **Kernel Version**: 6.8.0-84-generic
+- **Kernel Version**: 6.8.0-85-generic
 - **Kubernetes**: 1.33.4
 - **Container Runtime**: Docker/container with privileged mode support
 
@@ -182,7 +182,7 @@ lsmod | grep v4l2loopback
 
 # Install if missing
 sudo apt-get update
-sudo apt-get install linux-modules-extra-6.8.0-84-generic
+sudo apt-get install linux-modules-extra-6.8.0-85-generic
 sudo apt-get install v4l2loopback-dkms v4l2loopback-utils
 ```
 
