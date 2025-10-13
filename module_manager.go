@@ -43,7 +43,14 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 	if out, err := exec.CommandContext(vctx, "modprobe", "videodev").CombinedOutput(); err != nil {
 		logger.Error("Failed to load videodev module - this is required for v4l2loopback", "error", err, "output", strings.TrimSpace(string(out)))
 		logger.Info("Make sure linux-modules-extra-$(uname -r) is installed")
-		return fmt.Errorf("failed to load videodev module: %w", err)
+
+		// Create a structured error that can be handled by the caller
+		return &ModuleLoadError{
+			Module:      "videodev",
+			Reason:      "module not found - kernel headers mismatch",
+			Original:    err,
+			CanFallback: config.EnableFallbackMode,
+		}
 	}
 
 	// Verify videodev is loaded
@@ -83,7 +90,13 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		if ctx.Err() == context.DeadlineExceeded {
 			logger.Error("Failed to load v4l2loopback module - operation timed out",
 				"timeout_seconds", config.DeviceCreationTimeout)
-			return fmt.Errorf("modprobe timed out after %d seconds: %w", config.DeviceCreationTimeout, err)
+
+			return &ModuleLoadError{
+				Module:      "v4l2loopback",
+				Reason:      "module loading timeout",
+				Original:    err,
+				CanFallback: config.EnableFallbackMode,
+			}
 		}
 
 		logger.Error("Failed to load v4l2loopback module")
@@ -101,7 +114,13 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		} else {
 			logger.Debug("dmesg not available or restricted", "error", dmesgErr)
 		}
-		return fmt.Errorf("failed to load v4l2loopback module: %w", err)
+
+		return &ModuleLoadError{
+			Module:      "v4l2loopback",
+			Reason:      "module loading failed",
+			Original:    err,
+			CanFallback: config.EnableFallbackMode,
+		}
 	}
 
 	logger.Info("v4l2loopback module loaded successfully")

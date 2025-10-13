@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,41 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
+
+// reloadV4L2Module reloads the v4l2loopback module to refresh devices
+func (p *VideoDevicePlugin) reloadV4L2Module() {
+	p.logger.Debug("Attempting to reload v4l2loopback module to refresh devices")
+
+	// First try to unload the module (ignore errors if in use)
+	unloadCmd := exec.Command("modprobe", "-r", "v4l2loopback")
+	if out, err := unloadCmd.CombinedOutput(); err != nil {
+		p.logger.Debug("Failed to unload v4l2loopback (may be in use)", "error", err, "output", strings.TrimSpace(string(out)))
+	} else {
+		p.logger.Debug("Successfully unloaded v4l2loopback module")
+	}
+
+	// Reload the module with the same parameters
+	videoNumbers := make([]string, p.config.MaxDevices)
+	cardLabels := make([]string, p.config.MaxDevices)
+	exclusiveCaps := make([]string, p.config.MaxDevices)
+	for i := 0; i < p.config.MaxDevices; i++ {
+		videoNumbers[i] = fmt.Sprintf("%d", VideoDeviceStartNumber+i)
+		cardLabels[i] = fmt.Sprintf(`"%s"`, p.config.V4L2CardLabel)
+		exclusiveCaps[i] = fmt.Sprintf("%d", p.config.V4L2ExclusiveCaps)
+	}
+
+	reloadCmd := exec.Command("modprobe", "v4l2loopback",
+		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
+		fmt.Sprintf("max_buffers=%d", p.config.V4L2MaxBuffers),
+		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
+		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
+
+	if out, err := reloadCmd.CombinedOutput(); err != nil {
+		p.logger.Debug("Failed to reload v4l2loopback module", "error", err, "output", strings.TrimSpace(string(out)))
+	} else {
+		p.logger.Debug("Successfully reloaded v4l2loopback module")
+	}
+}
 
 // VideoDevicePlugin implements the Kubernetes device plugin gRPC server
 type VideoDevicePlugin struct {
@@ -214,10 +251,20 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 		})
 	}
 
-	p.logger.Info("Found video devices",
-		"device_count", len(devices),
-		"healthy_count", healthyCount,
-		"unhealthy_count", len(devices)-healthyCount)
+	// Log device status with fallback mode information
+	if p.v4l2Manager.IsFallbackMode() {
+		p.logger.Warn("Found video devices (FALLBACK MODE)",
+			"device_count", len(devices),
+			"healthy_count", healthyCount,
+			"unhealthy_count", len(devices)-healthyCount,
+			"fallback_reason", p.v4l2Manager.GetFallbackReason(),
+			"note", "Devices are dummy paths - applications should handle gracefully")
+	} else {
+		p.logger.Info("Found video devices",
+			"device_count", len(devices),
+			"healthy_count", healthyCount,
+			"unhealthy_count", len(devices)-healthyCount)
+	}
 
 	// Send initial device list
 	response := &pluginapi.ListAndWatchResponse{
@@ -237,7 +284,12 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 			p.logger.Debug("ListAndWatch stopping")
 			return nil
 		case <-ticker.C:
-			// Periodic health check - send updated device list with per-device health status
+			// Periodic health check - only reload v4l2loopback module if not in fallback mode
+			if !p.v4l2Manager.IsFallbackMode() {
+				p.reloadV4L2Module()
+			}
+
+			// Send updated device list with per-device health status
 			allDevices := p.v4l2Manager.ListAllDevices()
 
 			var devices []*pluginapi.Device
@@ -260,10 +312,19 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 				})
 			}
 
-			p.logger.Debug("Health check completed",
-				"device_count", len(devices),
-				"healthy_count", healthyCount,
-				"unhealthy_count", len(devices)-healthyCount)
+			// Log health check with fallback mode information
+			if p.v4l2Manager.IsFallbackMode() {
+				p.logger.Debug("Health check completed (FALLBACK MODE)",
+					"device_count", len(devices),
+					"healthy_count", healthyCount,
+					"unhealthy_count", len(devices)-healthyCount,
+					"fallback_reason", p.v4l2Manager.GetFallbackReason())
+			} else {
+				p.logger.Debug("Health check completed",
+					"device_count", len(devices),
+					"healthy_count", healthyCount,
+					"unhealthy_count", len(devices)-healthyCount)
+			}
 
 			response := &pluginapi.ListAndWatchResponse{
 				Devices: devices,
@@ -352,11 +413,22 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		},
 	}
 
-	p.logger.Info("Allocated device",
-		"device_id", device.ID,
-		"host_path", device.Path,
-		"container_path", device.Path,
-		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
+	// Log device allocation with fallback mode information
+	if p.v4l2Manager.IsFallbackMode() {
+		p.logger.Warn("Allocated device (FALLBACK MODE)",
+			"device_id", device.ID,
+			"host_path", device.Path,
+			"container_path", device.Path,
+			"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path),
+			"fallback_reason", p.v4l2Manager.GetFallbackReason(),
+			"note", "This is a dummy device path - application should handle gracefully")
+	} else {
+		p.logger.Info("Allocated device",
+			"device_id", device.ID,
+			"host_path", device.Path,
+			"container_path", device.Path,
+			"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
+	}
 
 	response := &pluginapi.ContainerAllocateResponse{
 		Devices: devices,
@@ -436,4 +508,3 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 		// label target for goto to resume outer loop
 	}
 }
-

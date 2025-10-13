@@ -81,6 +81,11 @@ func loadConfig() *DevicePluginConfig {
 		DeviceCreationTimeout: getEnvInt("DEVICE_CREATION_TIMEOUT", 60),
 		ShutdownTimeout:       getEnvInt("SHUTDOWN_TIMEOUT", 10),
 		CleanupTimeout:        getEnvInt("CLEANUP_TIMEOUT", 15),
+
+		// Fallback Configuration
+		EnableFallbackMode:   getEnvBool("ENABLE_FALLBACK_MODE", true),
+		FallbackDevicePrefix: getEnv("FALLBACK_DEVICE_PREFIX", "/dev/dummy-video"),
+		FallbackModeReason:   "", // Will be set when fallback mode is activated
 	}
 
 	// Validate MaxDevices - v4l2loopback has a hard limit of 8 devices

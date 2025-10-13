@@ -24,6 +24,7 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 - **🔄 Robust**: Auto-recovery from kubelet restarts and real-time health updates
 - **🔍 Observable**: Structured logging and per-device health monitoring
 - **🚫 No Device Conflicts**: Automatic device isolation between concurrent pods
+- **🆘 Fallback Mode**: Graceful degradation with dummy devices when kernel modules fail
 
 ## 🏗️ Architecture Overview
 
@@ -152,6 +153,15 @@ for _, device := range allDevices {
 - **Thread-Safe Operations**: Mutex-protected device state management
 - **No Complex Tracking**: Leverages Kubernetes' built-in device management
 
+### Fallback Mode Feature
+
+- **Graceful Degradation**: Automatically switches to dummy device mode when kernel modules fail
+- **Kernel Header Mismatch Handling**: Prevents pod scheduling failures due to missing kernel headers
+- **Dummy Device Paths**: Creates actual device files `/dev/dummy-video10`, `/dev/dummy-video11`, etc. that can be mounted by Kubernetes
+- **Application-Friendly**: Applications receive device paths they can handle gracefully
+- **Comprehensive Logging**: Clear indication when running in fallback mode with reason
+- **Configurable Fallback**: Can be disabled or customized via environment variables
+
 ### Advanced Features
 
 - **Structured Logging**: JSON-formatted logs with configurable levels
@@ -216,6 +226,10 @@ V4L2_EXCLUSIVE_CAPS=1
 V4L2_CARD_LABEL=MeetingBot_WebCam
 V4L2_DEVICE_PERM=0666
 
+# Fallback Configuration
+ENABLE_FALLBACK_MODE=true
+FALLBACK_DEVICE_PREFIX=/dev/dummy-video
+
 # Monitoring
 ENABLE_METRICS=false
 METRICS_PORT=8080
@@ -232,6 +246,8 @@ HEALTH_CHECK_INTERVAL=30
 | `RESOURCE_NAME` | K8s resource name | meeting-baas.io/video-devices | String |
 | `V4L2_CARD_LABEL` | Device label | MeetingBot_WebCam | String |
 | `V4L2_DEVICE_PERM` | Device permissions (octal) | 0666 | 0600-0777 |
+| `ENABLE_FALLBACK_MODE` | Enable fallback mode on kernel module failure | true | true/false |
+| `FALLBACK_DEVICE_PREFIX` | Prefix for dummy device paths in fallback mode | /dev/dummy-video | String |
 
 ### Security Considerations
 
@@ -446,6 +462,34 @@ kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/v
 | Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
 | Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |
 | Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
+| Plugin enters fallback mode | Kernel header mismatch | Check logs for fallback reason, ensure correct kernel headers are installed |
+| Applications receive dummy device paths | Fallback mode active | This is expected behavior - applications should handle gracefully |
+
+### Fallback Mode Troubleshooting
+
+When the plugin enters fallback mode, you'll see logs like:
+
+```json
+{
+  "time": "2024-01-15T10:30:00Z",
+  "level": "WARN",
+  "msg": "Video device plugin running in fallback mode",
+  "reason": "videodev module not found - kernel headers mismatch",
+  "dummy_devices": 4,
+  "fallback_prefix": "/dev/dummy-video"
+}
+```
+
+**Common Fallback Scenarios:**
+- **Kernel header mismatch**: `linux-modules-extra-$(uname -r)` not installed
+- **Module loading timeout**: Kernel module loading takes too long
+- **Permission issues**: Insufficient privileges to load kernel modules
+
+**Handling Fallback Mode:**
+1. **For Applications**: Check for dummy device paths and handle gracefully
+2. **For Operators**: Monitor logs for fallback mode activation with structured error details
+3. **For Debugging**: Check structured error logs with original error information
+4. **Device Files**: Fallback devices are created as symbolic links to `/dev/null` for Kubernetes mounting
 
 ### Logging
 
