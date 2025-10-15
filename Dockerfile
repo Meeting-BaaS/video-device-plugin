@@ -36,15 +36,28 @@ RUN apt-get update && \
     kmod \
     linux-modules-extra-6.8.0-85-generic \
     linux-headers-6.8.0-85-generic \
-    v4l2loopback-dkms \
-    v4l2loopback-utils \
     v4l-utils \
     zstd \
     ca-certificates \
     dkms \
     build-essential \
+    git \
+    wget \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
+# Install latest v4l2loopback from source (version 0.15.1)
+RUN cd /tmp && \
+    wget https://github.com/umlaeute/v4l2loopback/archive/refs/tags/v0.15.1.tar.gz && \
+    tar -xzf v0.15.1.tar.gz && \
+    cd v4l2loopback-0.15.1 && \
+    make all && \
+    make install && \
+    make install-utils && \
+    # Remove old module to ensure new version is loaded (hardcoded kernel version for build env)
+    rm -f /lib/modules/6.8.0-85-generic/kernel/v4l2loopback/v4l2loopback.ko.zst && \
+    cd / && \
+    rm -rf /tmp/v4l2loopback-0.15.1 /tmp/v0.15.1.tar.gz
 
 
 # Copy Go binary from builder stage

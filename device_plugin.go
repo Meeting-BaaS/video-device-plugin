@@ -16,41 +16,6 @@ import (
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
-// reloadV4L2Module reloads the v4l2loopback module to refresh devices
-func (p *VideoDevicePlugin) reloadV4L2Module() {
-	p.logger.Debug("Attempting to reload v4l2loopback module to refresh devices")
-
-	// First try to unload the module (ignore errors if in use)
-	unloadCmd := exec.Command("modprobe", "-r", "v4l2loopback")
-	if out, err := unloadCmd.CombinedOutput(); err != nil {
-		p.logger.Debug("Failed to unload v4l2loopback (may be in use)", "error", err, "output", strings.TrimSpace(string(out)))
-	} else {
-		p.logger.Debug("Successfully unloaded v4l2loopback module")
-	}
-
-	// Reload the module with the same parameters
-	videoNumbers := make([]string, p.config.MaxDevices)
-	cardLabels := make([]string, p.config.MaxDevices)
-	exclusiveCaps := make([]string, p.config.MaxDevices)
-	for i := 0; i < p.config.MaxDevices; i++ {
-		videoNumbers[i] = fmt.Sprintf("%d", VideoDeviceStartNumber+i)
-		cardLabels[i] = fmt.Sprintf(`"%s"`, p.config.V4L2CardLabel)
-		exclusiveCaps[i] = fmt.Sprintf("%d", p.config.V4L2ExclusiveCaps)
-	}
-
-	reloadCmd := exec.Command("modprobe", "v4l2loopback",
-		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
-		fmt.Sprintf("max_buffers=%d", p.config.V4L2MaxBuffers),
-		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
-		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
-
-	if out, err := reloadCmd.CombinedOutput(); err != nil {
-		p.logger.Debug("Failed to reload v4l2loopback module", "error", err, "output", strings.TrimSpace(string(out)))
-	} else {
-		p.logger.Debug("Successfully reloaded v4l2loopback module")
-	}
-}
-
 // VideoDevicePlugin implements the Kubernetes device plugin gRPC server
 type VideoDevicePlugin struct {
 	pluginapi.UnimplementedDevicePluginServer
@@ -284,10 +249,7 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 			p.logger.Debug("ListAndWatch stopping")
 			return nil
 		case <-ticker.C:
-			// Periodic health check - only reload v4l2loopback module if not in fallback mode
-			if !p.v4l2Manager.IsFallbackMode() {
-				p.reloadV4L2Module()
-			}
+			// Periodic health check
 
 			// Send updated device list with per-device health status
 			allDevices := p.v4l2Manager.ListAllDevices()
@@ -371,9 +333,72 @@ func (p *VideoDevicePlugin) GetDevicePluginOptions(ctx context.Context, req *plu
 	p.logger.Debug("GetDevicePluginOptions called")
 
 	return &pluginapi.DevicePluginOptions{
-		PreStartRequired:                false,
+		PreStartRequired:                true,
 		GetPreferredAllocationAvailable: false,
 	}, nil
+}
+
+// PreStartContainer implements the PreStartContainer gRPC method
+func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginapi.PreStartContainerRequest) (*pluginapi.PreStartContainerResponse, error) {
+	p.logger.Info("PreStartContainer called", "devices", req.DevicesIDs)
+
+	// Skip device reset in fallback mode
+	if p.v4l2Manager.IsFallbackMode() {
+		p.logger.Warn("PreStartContainer called in FALLBACK MODE - skipping device reset",
+			"devices", req.DevicesIDs,
+			"fallback_reason", p.v4l2Manager.GetFallbackReason(),
+			"note", "Devices are dummy paths - no actual reset needed")
+		return &pluginapi.PreStartContainerResponse{}, nil
+	}
+
+	// Always reset devices to ensure they are fresh
+	for _, deviceID := range req.DevicesIDs {
+		device, err := p.v4l2Manager.GetDeviceByID(deviceID)
+		if err != nil {
+			p.logger.Warn("Failed to get device info", "device_id", deviceID, "error", err)
+			continue
+		}
+
+		p.logger.Info("Resetting device", "device_id", deviceID, "device_path", device.Path)
+
+		// Reset the device using v4l2loopback-ctl
+		if err := p.resetDevice(device.Path); err != nil {
+			p.logger.Error("Failed to reset device", "device_id", deviceID, "device_path", device.Path, "error", err)
+			return nil, fmt.Errorf("failed to reset device %s: %w", deviceID, err)
+		}
+
+		p.logger.Info("Device reset successfully", "device_id", deviceID, "device_path", device.Path)
+	}
+
+	return &pluginapi.PreStartContainerResponse{}, nil
+}
+
+// resetDevice resets a v4l2loopback device by deleting and recreating it
+func (p *VideoDevicePlugin) resetDevice(devicePath string) error {
+	p.logger.Debug("Resetting device", "device_path", devicePath)
+
+	// Delete the device
+	deleteCmd := exec.Command("v4l2loopback-ctl", "delete", devicePath)
+	if out, err := deleteCmd.CombinedOutput(); err != nil {
+		p.logger.Debug("Failed to delete device (may not exist)", "device_path", devicePath, "error", err, "output", strings.TrimSpace(string(out)))
+	} else {
+		p.logger.Debug("Device deleted successfully", "device_path", devicePath)
+	}
+
+	// Recreate the device with same configuration
+	addCmd := exec.Command("v4l2loopback-ctl", "add",
+		"-n", p.config.V4L2CardLabel,
+		"-b", fmt.Sprintf("%d", p.config.V4L2MaxBuffers),
+		"-x", fmt.Sprintf("%d", p.config.V4L2ExclusiveCaps),
+		devicePath)
+
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		p.logger.Error("Failed to recreate device", "device_path", devicePath, "error", err, "output", strings.TrimSpace(string(out)))
+		return fmt.Errorf("failed to recreate device %s: %w", devicePath, err)
+	}
+
+	p.logger.Debug("Device recreated successfully", "device_path", devicePath)
+	return nil
 }
 
 // Note: GetPreferredAllocation and PreStartContainer are handled by the embedded

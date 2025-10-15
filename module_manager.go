@@ -79,11 +79,21 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "modprobe", "v4l2loopback",
+	// Load v4l2loopback using insmod to ensure we get the newer version from /updates/
+	// Get kernel version for the module path
+	kernelVersion, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		logger.Error("Failed to get kernel version", "error", err)
+		return fmt.Errorf("failed to get kernel version: %w", err)
+	}
+
+	modulePath := fmt.Sprintf("/lib/modules/%s/updates/v4l2loopback.ko", strings.TrimSpace(string(kernelVersion)))
+	cmd := exec.CommandContext(ctx, "insmod", modulePath,
 		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
 		fmt.Sprintf("max_buffers=%d", config.V4L2MaxBuffers),
 		fmt.Sprintf("exclusive_caps=%s", strings.Join(exclusiveCaps, ",")),
-		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")))
+		fmt.Sprintf("card_label=%s", strings.Join(cardLabels, ",")),
+		fmt.Sprintf("devices=%d", config.MaxDevices))
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Check if the error is due to timeout

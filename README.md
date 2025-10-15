@@ -25,6 +25,8 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 - **🔍 Observable**: Structured logging and per-device health monitoring
 - **🚫 No Device Conflicts**: Automatic device isolation between concurrent pods
 - **🆘 Fallback Mode**: Graceful degradation with dummy devices when kernel modules fail
+- **🔧 Dynamic Device Management**: Automatic device reset between allocations using v4l2loopback-ctl
+- **⚡ Fresh Device State**: Every pod gets a clean, reset device to prevent unresponsive states
 
 ## 🏗️ Architecture Overview
 
@@ -59,9 +61,10 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 4. Kubelet chooses which device to allocate (e.g., video10)
 5. Kubelet calls device plugin with specific device ID
 6. Device plugin validates and returns device info (env vars, mounts)
-7. Pod starts with VIDEO_DEVICE=/dev/video10
-8. Kubernetes manages device lifecycle automatically
-9. Device plugin monitors health every 30 seconds
+7. PreStartContainer resets the device (delete + recreate) for fresh state
+8. Pod starts with VIDEO_DEVICE=/dev/video10
+9. Kubernetes manages device lifecycle automatically
+10. Device plugin monitors health every 30 seconds
 ```
 
 ## 🔧 Key Concepts
@@ -73,7 +76,7 @@ The plugin implements the **Kubernetes Device Plugin API** with these key method
 - **`ListAndWatch`**: Streams available devices to kubelet
 - **`Allocate`**: Allocates specific devices to pods
 - **`GetDevicePluginOptions`**: Returns plugin configuration
-- **`PreStartContainer`**: Optional pre-start container logic
+- **`PreStartContainer`**: Resets devices before container start for fresh state
 
 ### 2. Kubernetes-Native Device Management
 
@@ -152,6 +155,18 @@ for _, device := range allDevices {
 - **Real-time Health Updates**: Immediate notification when devices become unhealthy
 - **Thread-Safe Operations**: Mutex-protected device state management
 - **No Complex Tracking**: Leverages Kubernetes' built-in device management
+- **Dynamic Device Reset**: Automatic device refresh between allocations using v4l2loopback-ctl
+- **Fresh Device State**: Every pod gets a clean, reset device to prevent unresponsive states
+
+### Dynamic Device Management Feature
+
+- **Automatic Device Reset**: Every pod allocation triggers a device reset (delete + recreate)
+- **v4l2loopback-ctl Integration**: Uses the latest v4l2loopback-ctl (v0.15.1) for device management
+- **Fresh Device State**: Eliminates unresponsive device issues between allocations
+- **PreStartContainer Hook**: Leverages Kubernetes PreStartContainer for device reset timing
+- **Configuration Preservation**: Recreates devices with same parameters (buffers, caps, labels)
+- **Fallback Mode Support**: Skips device reset when in fallback mode (dummy devices)
+- **Error Handling**: Comprehensive error handling and logging for device reset operations
 
 ### Fallback Mode Feature
 
@@ -195,6 +210,8 @@ sudo apt-get update
 sudo apt-get install linux-modules-extra-6.8.0-85-generic
 sudo apt-get install v4l2loopback-dkms v4l2loopback-utils
 ```
+
+**Note**: This plugin automatically installs and uses v4l2loopback v0.15.1 (latest version) from source during the Docker build process. The older Ubuntu package version (0.6) is replaced to ensure compatibility with dynamic device management features.
 
 ### Kubernetes Requirements
 
@@ -464,6 +481,9 @@ kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/v
 | Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
 | Plugin enters fallback mode | Kernel header mismatch | Check logs for fallback reason, ensure correct kernel headers are installed |
 | Applications receive dummy device paths | Fallback mode active | This is expected behavior - applications should handle gracefully |
+| Device reset fails | v4l2loopback-ctl not found | Check that v4l2loopback-ctl is installed and control device exists |
+| Device reset fails | Control device missing | Check that `/dev/v4l2loopback` exists and module is loaded correctly |
+| PreStartContainer errors | Device reset timeout | Check device reset logs and v4l2loopback-ctl output |
 
 ### Fallback Mode Troubleshooting
 
@@ -521,6 +541,29 @@ The plugin uses structured JSON logging with health monitoring:
   "msg": "Device health check failed",
   "device_id": "video15",
   "device_path": "/dev/video15"
+}
+
+{
+  "time": "2024-01-15T10:31:00Z",
+  "level": "INFO",
+  "msg": "PreStartContainer called",
+  "devices": ["video10"]
+}
+
+{
+  "time": "2024-01-15T10:31:01Z",
+  "level": "INFO",
+  "msg": "Resetting device",
+  "device_id": "video10",
+  "device_path": "/dev/video10"
+}
+
+{
+  "time": "2024-01-15T10:31:02Z",
+  "level": "INFO",
+  "msg": "Device reset successfully",
+  "device_id": "video10",
+  "device_path": "/dev/video10"
 }
 ```
 
