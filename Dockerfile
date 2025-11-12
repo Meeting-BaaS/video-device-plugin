@@ -48,17 +48,24 @@ RUN apt-get update && \
 
 # Install latest v4l2loopback from source (version 0.15.1)
 # Build the module against the target kernel version specified in KERNEL_VERSION
+# The Makefile uses `uname -r` internally, so we need to override it with a wrapper
 WORKDIR /tmp
 RUN wget -nv https://github.com/umlaeute/v4l2loopback/archive/refs/tags/v0.15.1.tar.gz && \
     tar -xzf v0.15.1.tar.gz && \
     cd v4l2loopback-0.15.1 && \
+    # Create a wrapper script to override uname -r to return target kernel version
+    printf '#!/bin/sh\nif [ "$1" = "-r" ]; then\n  echo "%s"\nelse\n  /usr/bin/uname "$@"\nfi\n' "${KERNEL_VERSION}" > /tmp/uname && \
+    chmod +x /tmp/uname && \
     # Build and install userland utility (v4l2loopback-ctl)
     make install-utils && \
-    # Build the kernel module against the target kernel version (not build host kernel)
-    make all KERNELDIR=/lib/modules/${KERNEL_VERSION}/build && \
+    # Build the kernel module - PATH override ensures our uname wrapper is used
+    PATH="/tmp:$PATH" make all && \
     # Remove stale copies before installing the new module (prevents deleting what we just install)
     find /lib/modules/${KERNEL_VERSION} -type f -name 'v4l2loopback.ko*' -delete || true && \
-    make install && \
+    # Install the module - PATH override ensures our uname wrapper is used
+    PATH="/tmp:$PATH" make install && \
+    # Cleanup
+    rm -f /tmp/uname && \
     cd / && \
     rm -rf /tmp/v4l2loopback-0.15.1 /tmp/v0.15.1.tar.gz
 
