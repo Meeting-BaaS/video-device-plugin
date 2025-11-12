@@ -24,6 +24,9 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 - **🔄 Robust**: Auto-recovery from kubelet restarts and real-time health updates
 - **🔍 Observable**: Structured logging and per-device health monitoring
 - **🚫 No Device Conflicts**: Automatic device isolation between concurrent pods
+- **🆘 Fallback Mode**: Graceful degradation with dummy devices when kernel modules fail
+- **🔧 Dynamic Device Management**: Automatic device reset between allocations using v4l2loopback-ctl
+- **⚡ Fresh Device State**: Every pod gets a clean, reset device to prevent unresponsive states
 
 ## 🏗️ Architecture Overview
 
@@ -58,9 +61,10 @@ This plugin solves these problems by providing a **Kubernetes-native way to mana
 4. Kubelet chooses which device to allocate (e.g., video10)
 5. Kubelet calls device plugin with specific device ID
 6. Device plugin validates and returns device info (env vars, mounts)
-7. Pod starts with VIDEO_DEVICE=/dev/video10
-8. Kubernetes manages device lifecycle automatically
-9. Device plugin monitors health every 30 seconds
+7. PreStartContainer resets the device (delete + recreate) for fresh state
+8. Pod starts with VIDEO_DEVICE=/dev/video10
+9. Kubernetes manages device lifecycle automatically
+10. Device plugin monitors health every 30 seconds
 ```
 
 ## 🔧 Key Concepts
@@ -72,7 +76,7 @@ The plugin implements the **Kubernetes Device Plugin API** with these key method
 - **`ListAndWatch`**: Streams available devices to kubelet
 - **`Allocate`**: Allocates specific devices to pods
 - **`GetDevicePluginOptions`**: Returns plugin configuration
-- **`PreStartContainer`**: Optional pre-start container logic
+- **`PreStartContainer`**: Resets devices before container start for fresh state
 
 ### 2. Kubernetes-Native Device Management
 
@@ -151,6 +155,31 @@ for _, device := range allDevices {
 - **Real-time Health Updates**: Immediate notification when devices become unhealthy
 - **Thread-Safe Operations**: Mutex-protected device state management
 - **No Complex Tracking**: Leverages Kubernetes' built-in device management
+- **Dynamic Device Reset**: Automatic device refresh between allocations using v4l2loopback-ctl
+- **Fresh Device State**: Every pod gets a clean, reset device to prevent unresponsive states
+
+### Dynamic Device Management Feature
+
+- **Automatic Device Reset**: Every pod allocation triggers a device reset (delete + recreate)
+- **v4l2loopback-ctl Integration**: Uses the latest v4l2loopback-ctl (v0.15.1) for device management
+- **Fresh Device State**: Eliminates unresponsive device issues between allocations
+- **PreStartContainer Hook**: Leverages Kubernetes PreStartContainer for device reset timing
+- **Timeout Protection**: Device reset operations are bounded by `DEVICE_CREATION_TIMEOUT` to prevent hangs
+- **Configuration Preservation**: Recreates devices with same parameters (buffers, caps, labels)
+- **Fallback Mode Support**: Skips device reset when in fallback mode (dummy devices)
+- **Error Handling**: Comprehensive error handling and logging for device reset operations
+
+### Fallback Mode Feature
+
+- **Graceful Degradation**: Automatically switches to dummy device mode when kernel modules fail
+- **Kernel Header Mismatch Handling**: Prevents pod scheduling failures due to missing kernel headers
+- **Module Path Discovery**: Automatically searches multiple common module paths for v4l2loopback
+- **Dummy Device Paths**: Creates actual device files `/dev/dummy-video10`, `/dev/dummy-video11`, etc. that can be mounted by Kubernetes
+- **Secure File Creation**: Uses TOCTOU-safe file creation with symlink protection
+- **Application-Friendly**: Applications receive device paths they can handle gracefully
+- **Comprehensive Logging**: Clear indication when running in fallback mode with reason
+- **Configurable Fallback**: Can be disabled or customized via environment variables
+- **Safe Cleanup**: Only removes files matching the fallback prefix to prevent accidental deletions
 
 ### Advanced Features
 
@@ -172,6 +201,7 @@ for _, device := range allDevices {
 - **Container Runtime**: Docker/container with privileged mode support
 
 > **Note**: While these are the hard prerequisites for this repository, the device plugin can be configured for other systems. For different kernel and Ubuntu versions, the Dockerfile can be updated to download Linux headers for the required kernel version. Go dependencies should be changed based on the desired Kubernetes version. However, this module has been tested and verified on the above configuration.
+> **Building for Amazon Linux / Amazon EKS**: If you're deploying to Amazon EKS with Amazon Linux 2023 nodes, see the [Amazon Linux Build Guide](AMAZON_LINUX_BUILD_GUIDE.md) for instructions on building the plugin for that environment.
 
 ### Required Kernel Modules
 
@@ -185,6 +215,14 @@ sudo apt-get update
 sudo apt-get install linux-modules-extra-6.8.0-85-generic
 sudo apt-get install v4l2loopback-dkms v4l2loopback-utils
 ```
+
+**Note**: This plugin automatically installs and uses v4l2loopback v0.15.1 (latest version) from source during the Docker build process. The module is compiled for the target kernel version specified via the `KERNEL_VERSION` build argument (default: `6.8.0-85-generic`). The older Ubuntu package version (0.6) is replaced to ensure compatibility with dynamic device management features.
+
+**Kernel Version Configuration**: The Dockerfile uses a parameterized `KERNEL_VERSION` build argument. You can specify the kernel version when building:
+
+- Via build script: Set `KERNEL_VERSION` in your `.env` file
+- Via docker build: Use `--build-arg KERNEL_VERSION=<version>`
+- Default: `6.8.0-85-generic` if not specified
 
 ### Kubernetes Requirements
 
@@ -216,6 +254,10 @@ V4L2_EXCLUSIVE_CAPS=1
 V4L2_CARD_LABEL=MeetingBot_WebCam
 V4L2_DEVICE_PERM=0666
 
+# Fallback Configuration
+ENABLE_FALLBACK_MODE=true
+FALLBACK_DEVICE_PREFIX=/dev/dummy-video
+
 # Monitoring
 ENABLE_METRICS=false
 METRICS_PORT=8080
@@ -224,25 +266,27 @@ HEALTH_CHECK_INTERVAL=30
 
 ### Configuration Details
 
-| Variable | Description | Default | Range |
-|----------|-------------|---------|-------|
-| `NODE_NAME` | Kubernetes node name | Required | String |
-| `MAX_DEVICES` | Devices per node | 8 | 1-8 |
-| `LOG_LEVEL` | Logging level | info | debug/info/warn/error |
-| `RESOURCE_NAME` | K8s resource name | meeting-baas.io/video-devices | String |
-| `V4L2_CARD_LABEL` | Device label | MeetingBot_WebCam | String |
-| `V4L2_DEVICE_PERM` | Device permissions (octal) | 0666 | 0600-0777 |
+| Variable                 | Description                                    | Default                       | Range                 |
+| ------------------------ | ---------------------------------------------- | ----------------------------- | --------------------- |
+| `NODE_NAME`              | Kubernetes node name                           | Required                      | String                |
+| `MAX_DEVICES`            | Devices per node                               | 8                             | 1-8                   |
+| `LOG_LEVEL`              | Logging level                                  | info                          | debug/info/warn/error |
+| `RESOURCE_NAME`          | K8s resource name                              | meeting-baas.io/video-devices | String                |
+| `V4L2_CARD_LABEL`        | Device label                                   | MeetingBot_WebCam             | String                |
+| `V4L2_DEVICE_PERM`       | Device permissions (octal)                     | 0666                          | 0600-0777             |
+| `ENABLE_FALLBACK_MODE`   | Enable fallback mode on kernel module failure  | true                          | true/false            |
+| `FALLBACK_DEVICE_PREFIX` | Prefix for dummy device paths in fallback mode | /dev/dummy-video              | String                |
 
 ### Security Considerations
 
 The `V4L2_DEVICE_PERM` setting controls file permissions for video devices:
 
-| Permission | Description | Use Case |
-|------------|-------------|----------|
-| `0666` (default) | `rw-rw-rw-` | Development, testing, shared access |
-| `0644` | `rw-r--r--` | Production with read-only access for non-owners |
-| `0600` | `rw-------` | High security, owner-only access |
-| `0640` | `rw-r-----` | Group access for specific users |
+| Permission       | Description | Use Case                                        |
+| ---------------- | ----------- | ----------------------------------------------- |
+| `0666` (default) | `rw-rw-rw-` | Development, testing, shared access             |
+| `0644`           | `rw-r--r--` | Production with read-only access for non-owners |
+| `0600`           | `rw-------` | High security, owner-only access                |
+| `0640`           | `rw-r-----` | Group access for specific users                 |
 
 **Recommendations:**
 
@@ -255,12 +299,19 @@ The `V4L2_DEVICE_PERM` setting controls file permissions for video devices:
 ### 1. Build the Docker Image
 
 ```bash
-# Build the image
+# Build the image with default kernel version (6.8.0-85-generic)
 docker build -t video-device-plugin:latest .
 
-# Or use the build script
+# Build for a specific kernel version
+docker build --build-arg KERNEL_VERSION=6.8.0-100-generic -t video-device-plugin:latest .
+
+# Or use the build script (reads KERNEL_VERSION from .env or uses default)
 ./docker-build.sh
 ```
+
+**Note**: The Docker image builds the v4l2loopback kernel module for a specific kernel version. Ensure the `KERNEL_VERSION` matches the kernel version on your Kubernetes nodes. You can set `KERNEL_VERSION` in your `.env` file or pass it as a build argument.
+
+> **For Amazon EKS / Amazon Linux 2023**: The default Dockerfile is configured for Ubuntu. If you're deploying to Amazon EKS with Amazon Linux 2023 nodes, see the [Amazon Linux Build Guide](AMAZON_LINUX_BUILD_GUIDE.md) for build instructions.
 
 ### 2. Kubernetes Deployment
 
@@ -285,54 +336,54 @@ spec:
       hostNetwork: true
       hostPID: true
       containers:
-      - name: video-device-plugin
-        image: your-registry/video-device-plugin:latest
-        securityContext:
-          privileged: true
-        env:
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-        - name: MAX_DEVICES
-          value: "8"
-        - name: LOG_LEVEL
-          value: "info"
-        volumeMounts:
-        - name: device-plugins
-          mountPath: /var/lib/kubelet/device-plugins
-        - name: dev
-          mountPath: /dev
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "100m"
-          limits:
-            memory: "128Mi"
-            cpu: "200m"
-        livenessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - 'count=$(ls /dev/video* 2>/dev/null | wc -l); [ "$count" -ge "${MAX_DEVICES:-8}" ]'
-          initialDelaySeconds: 30
-          periodSeconds: 30
-        readinessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - 'count=$(ls /dev/video* 2>/dev/null | wc -l); [ "$count" -ge "${MAX_DEVICES:-8}" ]'
-          initialDelaySeconds: 10
-          periodSeconds: 10
+        - name: video-device-plugin
+          image: your-registry/video-device-plugin:latest
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: MAX_DEVICES
+              value: "8"
+            - name: LOG_LEVEL
+              value: "info"
+          volumeMounts:
+            - name: device-plugins
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: dev
+              mountPath: /dev
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - 'count=$(ls /dev/video* 2>/dev/null | wc -l); [ "$count" -ge "${MAX_DEVICES:-8}" ]'
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - 'count=$(ls /dev/video* 2>/dev/null | wc -l); [ "$count" -ge "${MAX_DEVICES:-8}" ]'
+            initialDelaySeconds: 10
+            periodSeconds: 10
       volumes:
-      - name: device-plugins
-        hostPath:
-          path: /var/lib/kubelet/device-plugins
-      - name: dev
-        hostPath:
-          path: /dev
+        - name: device-plugins
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: dev
+          hostPath:
+            path: /dev
 ```
 
 #### RBAC Configuration
@@ -349,9 +400,9 @@ kind: ClusterRole
 metadata:
   name: video-device-plugin
 rules:
-- apiGroups: [""]
-  resources: ["nodes"]
-  verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -362,9 +413,9 @@ roleRef:
   kind: ClusterRole
   name: video-device-plugin
 subjects:
-- kind: ServiceAccount
-  name: video-device-plugin
-  namespace: kube-system
+  - kind: ServiceAccount
+    name: video-device-plugin
+    namespace: kube-system
 ```
 
 **Note**: No pod permissions needed - the simplified architecture lets Kubernetes handle device lifecycle management entirely.
@@ -383,13 +434,13 @@ spec:
     template:
       spec:
         containers:
-        - name: video-processor
-          image: your-app:latest
-          resources:
-            requests:
-              meeting-baas.io/video-devices: 1
-            limits:
-              meeting-baas.io/video-devices: 1
+          - name: video-processor
+            image: your-app:latest
+            resources:
+              requests:
+                meeting-baas.io/video-devices: 1
+              limits:
+                meeting-baas.io/video-devices: 1
 ```
 
 #### Regular Pod Configuration
@@ -401,13 +452,13 @@ metadata:
   name: video-app
 spec:
   containers:
-  - name: video-app
-    image: your-app:latest
-    resources:
-      requests:
-        meeting-baas.io/video-devices: 1
-      limits:
-        meeting-baas.io/video-devices: 1
+    - name: video-app
+      image: your-app:latest
+      resources:
+        requests:
+          meeting-baas.io/video-devices: 1
+        limits:
+          meeting-baas.io/video-devices: 1
 ```
 
 ## 🔍 Monitoring and Troubleshooting
@@ -436,16 +487,51 @@ kubectl debug node/<node-name> -it --image=busybox -- chroot /host ls -la /dev/v
 
 ### Common Issues
 
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| Pods stuck in Pending | DaemonSet not running | Check DaemonSet status and logs |
-| No video devices | v4l2loopback not loaded | Check kernel module loading in logs |
-| Permission denied | Missing privileged mode | Ensure `privileged: true` in DaemonSet |
-| Permission denied | Device permissions too restrictive | Check `V4L2_DEVICE_PERM` setting and adjust if needed |
-| Device allocation fails | All devices busy | Check device utilization and scaling |
-| Plugin stops working after kubelet restart | Kubelet restart not detected | Plugin auto-re-registers, check logs for re-registration |
-| Devices reported as unhealthy | Device files missing/corrupted | Check device creation and permissions in logs |
-| Health check failures | Device access issues | Verify device permissions and v4l2loopback status |
+| Issue                                      | Cause                                | Solution                                                                         |
+| ------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------- |
+| Pods stuck in Pending                      | DaemonSet not running                | Check DaemonSet status and logs                                                  |
+| No video devices                           | v4l2loopback not loaded              | Check kernel module loading in logs                                              |
+| Permission denied                          | Missing privileged mode              | Ensure `privileged: true` in DaemonSet                                           |
+| Permission denied                          | Device permissions too restrictive   | Check `V4L2_DEVICE_PERM` setting and adjust if needed                            |
+| Device allocation fails                    | All devices busy                     | Check device utilization and scaling                                             |
+| Plugin stops working after kubelet restart | Kubelet restart not detected         | Plugin auto-re-registers, check logs for re-registration                         |
+| Devices reported as unhealthy              | Device files missing/corrupted       | Check device creation and permissions in logs                                    |
+| Health check failures                      | Device access issues                 | Verify device permissions and v4l2loopback status                                |
+| Plugin enters fallback mode                | Kernel header mismatch               | Check logs for fallback reason, ensure correct kernel headers are installed      |
+| Applications receive dummy device paths    | Fallback mode active                 | This is expected behavior - applications should handle gracefully                |
+| Device reset fails                         | v4l2loopback-ctl not found           | Check that v4l2loopback-ctl is installed and control device exists               |
+| Device reset fails                         | Control device missing               | Check that `/dev/v4l2loopback` exists and module is loaded correctly             |
+| PreStartContainer errors                   | Device reset timeout                 | Check device reset logs and v4l2loopback-ctl output                              |
+| Module not found                           | Module path mismatch                 | Check logs for searched paths, ensure module is built for correct kernel version |
+| Kernel version mismatch                    | Build-time vs runtime kernel differs | Rebuild image with correct `KERNEL_VERSION` build arg                            |
+
+### Fallback Mode Troubleshooting
+
+When the plugin enters fallback mode, you'll see logs like:
+
+```json
+{
+  "time": "2024-01-15T10:30:00Z",
+  "level": "WARN",
+  "msg": "Video device plugin running in fallback mode",
+  "reason": "videodev module not found - kernel headers mismatch",
+  "dummy_devices": 4,
+  "fallback_prefix": "/dev/dummy-video"
+}
+```
+
+**Common Fallback Scenarios:**
+
+- **Kernel header mismatch**: `linux-modules-extra-$(uname -r)` not installed
+- **Module loading timeout**: Kernel module loading takes too long
+- **Permission issues**: Insufficient privileges to load kernel modules
+
+**Handling Fallback Mode:**
+
+1. **For Applications**: Check for dummy device paths and handle gracefully
+2. **For Operators**: Monitor logs for fallback mode activation with structured error details
+3. **For Debugging**: Check structured error logs with original error information
+4. **Device Files**: Fallback devices are created as symbolic links to `/dev/null` for Kubernetes mounting
 
 ### Logging
 
@@ -477,6 +563,29 @@ The plugin uses structured JSON logging with health monitoring:
   "msg": "Device health check failed",
   "device_id": "video15",
   "device_path": "/dev/video15"
+}
+
+{
+  "time": "2024-01-15T10:31:00Z",
+  "level": "INFO",
+  "msg": "PreStartContainer called",
+  "devices": ["video10"]
+}
+
+{
+  "time": "2024-01-15T10:31:01Z",
+  "level": "INFO",
+  "msg": "Resetting device",
+  "device_id": "video10",
+  "device_path": "/dev/video10"
+}
+
+{
+  "time": "2024-01-15T10:31:02Z",
+  "level": "INFO",
+  "msg": "Device reset successfully",
+  "device_id": "video10",
+  "device_path": "/dev/video10"
 }
 ```
 

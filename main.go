@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -51,31 +53,75 @@ func main() {
 	// Display system information
 	displaySystemInfo(logger)
 
-	// Load v4l2loopback module
+	// Initialize V4L2 manager with fallback support
+	// Ensure fallback prefix is safe (absolute path under /dev/)
+	fallbackPrefix := config.FallbackDevicePrefix
+	if fallbackPrefix == "" || !strings.HasPrefix(fallbackPrefix, "/dev/") {
+		fallbackPrefix = "/dev/dummy-video"
+		if config.FallbackDevicePrefix != "" {
+			logger.Warn("Invalid fallback device prefix, using default",
+				"provided", config.FallbackDevicePrefix,
+				"default", fallbackPrefix)
+		} else {
+			logger.Info("Using default fallback device prefix", "fallback_prefix", fallbackPrefix)
+		}
+	}
+	v4l2Manager := NewV4L2Manager(logger, config.V4L2DevicePerm, fallbackPrefix)
+
+	// Try to load v4l2loopback module
 	if err := loadV4L2LoopbackModule(config, logger); err != nil {
-		logger.Error("Failed to load v4l2loopback module", "error", err)
-		os.Exit(1)
-	}
+		// Check if this is a module load error that supports fallback
+		var moduleErr *ModuleLoadError
+		if errors.As(err, &moduleErr) && moduleErr.CanFallback && config.EnableFallbackMode {
+			logger.Warn("Kernel module loading failed, enabling fallback mode",
+				"module", moduleErr.Module,
+				"reason", moduleErr.Reason,
+				"original_error", moduleErr.OriginalErrorMessage)
 
-	// Verify devices were created
-	if err := verifyVideoDevices(config, logger); err != nil {
-		logger.Error("Failed to verify video devices", "error", err)
-		os.Exit(1)
-	}
+			// Enable fallback mode with the structured error information
+			if fallbackErr := v4l2Manager.EnableFallbackMode(moduleErr.Reason, config.MaxDevices); fallbackErr != nil {
+				logger.Error("Failed to enable fallback mode", "error", fallbackErr)
+				os.Exit(1)
+			}
 
-	// Ensure device count and types match config exactly
-	if err := verifyV4L2Configuration(config, logger); err != nil {
-		logger.Error("v4l2 configuration verification failed", "error", err)
-		os.Exit(1)
-	}
+			// Set the fallback reason in config for logging
+			config.FallbackModeReason = moduleErr.Reason
 
-	// Initialize V4L2 manager
-	v4l2Manager := NewV4L2Manager(logger, config.V4L2DevicePerm)
+			logger.Warn("Video device plugin running in fallback mode",
+				"reason", moduleErr.Reason,
+				"dummy_devices", config.MaxDevices,
+				"fallback_prefix", fallbackPrefix)
+		} else {
+			// Determine the appropriate error message
+			if errors.As(err, &moduleErr) && moduleErr.CanFallback && !config.EnableFallbackMode {
+				logger.Error("Failed to load v4l2loopback module; fallback disabled by config",
+					"module", moduleErr.Module,
+					"reason", moduleErr.Reason,
+					"error", err,
+					"note", "Set ENABLE_FALLBACK_MODE=true to enable fallback mode")
+			} else {
+				logger.Error("Failed to load v4l2loopback module", "error", err)
+			}
+			os.Exit(1)
+		}
+	} else {
+		// Normal mode - verify devices were created and populate the V4L2 manager
+		if err := verifyVideoDevices(config, logger); err != nil {
+			logger.Error("Failed to verify video devices", "error", err)
+			os.Exit(1)
+		}
 
-	// Populate the V4L2 manager with the devices we just created
-	if err := v4l2Manager.CreateDevices(config.MaxDevices); err != nil {
-		logger.Error("Failed to populate V4L2 manager with devices", "error", err)
-		os.Exit(1)
+		// Ensure device count and types match config exactly
+		if err := verifyV4L2Configuration(config, logger); err != nil {
+			logger.Error("v4l2 configuration verification failed", "error", err)
+			os.Exit(1)
+		}
+
+		// Populate the V4L2 manager with real devices
+		if err := v4l2Manager.CreateDevices(config.MaxDevices); err != nil {
+			logger.Error("Failed to populate V4L2 manager with devices", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// Initialize device plugin
@@ -112,6 +158,9 @@ func main() {
 	if err := plugin.Stop(); err != nil {
 		logger.Error("Error during shutdown", "error", err)
 	}
+
+	// Cleanup fallback devices if in fallback mode
+	v4l2Manager.CleanupFallbackDevices()
 
 	// Cleanup v4l2loopback module
 	cleanupV4L2Module(config, logger)

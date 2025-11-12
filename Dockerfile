@@ -30,21 +30,54 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install runtime dependencies
+# Build the module in-image for the target kernel version (parameterized via ARG)
+ARG KERNEL_VERSION=6.8.0-85-generic
 RUN apt-get update && \
     apt-get upgrade --yes && \
     apt-get --allow-downgrades --no-install-recommends --yes install \
     kmod \
-    linux-modules-extra-6.8.0-85-generic \
-    linux-headers-6.8.0-85-generic \
-    v4l2loopback-dkms \
-    v4l2loopback-utils \
+    linux-modules-extra-${KERNEL_VERSION} \
+    linux-headers-${KERNEL_VERSION} \
     v4l-utils \
     zstd \
     ca-certificates \
-    dkms \
     build-essential \
+    wget \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
+# Install latest v4l2loopback from source (version 0.15.1)
+# Build the module against the target kernel version specified in KERNEL_VERSION
+# The Makefile uses `uname -r` internally, so we need to override it with a wrapper
+WORKDIR /tmp
+RUN wget -nv https://github.com/umlaeute/v4l2loopback/archive/refs/tags/v0.15.1.tar.gz && \
+    tar -xzf v0.15.1.tar.gz && \
+    cd v4l2loopback-0.15.1 && \
+    # Create a wrapper script to override uname -r to return target kernel version
+    printf '#!/bin/sh\nif [ "$1" = "-r" ]; then\n  echo "%s"\nelse\n  /usr/bin/uname "$@"\nfi\n' "${KERNEL_VERSION}" > /tmp/uname && \
+    chmod +x /tmp/uname && \
+    # Build and install userland utility (v4l2loopback-ctl)
+    make install-utils && \
+    # Build the kernel module - PATH override ensures our uname wrapper is used
+    PATH="/tmp:$PATH" make all && \
+    # Remove stale copies before installing the new module (prevents deleting what we just install)
+    find /lib/modules/${KERNEL_VERSION} -type f -name 'v4l2loopback.ko*' -delete || true && \
+    # Install the module - PATH override ensures our uname wrapper is used
+    PATH="/tmp:$PATH" make install && \
+    # Cleanup
+    rm -f /tmp/uname && \
+    cd / && \
+    rm -rf /tmp/v4l2loopback-0.15.1 /tmp/v0.15.1.tar.gz
+
+# Remove build-only tools after installation
+RUN apt-get purge --yes wget build-essential && \
+    apt-get autoremove --yes && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+# Note: The module is built for the kernel version specified in KERNEL_VERSION ARG.
+# Ensure all nodes in your cluster run this kernel version, or rebuild the image
+# with a different KERNEL_VERSION ARG for different kernel versions.
 
 
 # Copy Go binary from builder stage

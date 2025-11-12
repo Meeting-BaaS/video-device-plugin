@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -43,6 +44,11 @@ type DevicePluginConfig struct {
 	DeviceCreationTimeout int `json:"device_creation_timeout"` // Device creation timeout in seconds
 	ShutdownTimeout       int `json:"shutdown_timeout"`        // Graceful shutdown timeout in seconds
 	CleanupTimeout        int `json:"cleanup_timeout"`         // Module cleanup timeout in seconds
+
+	// Fallback Configuration
+	EnableFallbackMode   bool   `json:"enable_fallback_mode"`   // Enable fallback mode when kernel modules fail
+	FallbackDevicePrefix string `json:"fallback_device_prefix"` // Prefix for dummy device paths
+	FallbackModeReason   string `json:"fallback_mode_reason"`   // Reason for entering fallback mode
 }
 
 // V4L2Manager interface for managing V4L2 devices
@@ -64,6 +70,18 @@ type V4L2Manager interface {
 
 	// GetDeviceHealth returns health status for a specific device
 	GetDeviceHealth(deviceID string) bool
+
+	// IsFallbackMode returns true if the manager is in fallback mode
+	IsFallbackMode() bool
+
+	// GetFallbackReason returns the reason for fallback mode
+	GetFallbackReason() string
+
+	// EnableFallbackMode enables fallback mode and creates dummy devices
+	EnableFallbackMode(reason string, count int) error
+
+	// CleanupFallbackDevices removes the fallback device files
+	CleanupFallbackDevices()
 }
 
 // DevicePluginServer interface for the gRPC device plugin server
@@ -88,4 +106,21 @@ type HealthCheck struct {
 	DevicesReady bool      `json:"devices_ready"`
 	LastChecked  time.Time `json:"last_checked"`
 	Errors       []string  `json:"errors,omitempty"`
+}
+
+// ModuleLoadError represents an error that occurred during kernel module loading
+type ModuleLoadError struct {
+	Module               string `json:"module"`
+	Reason               string `json:"reason"`
+	Original             error  `json:"-"`                                // Omit from JSON to avoid serialization issues and potential leaks
+	OriginalErrorMessage string `json:"original_error_message,omitempty"` // String representation for JSON logging
+	CanFallback          bool   `json:"can_fallback"`
+}
+
+func (e *ModuleLoadError) Error() string {
+	return fmt.Sprintf("failed to load %s module: %s (original: %v)", e.Module, e.Reason, e.Original)
+}
+
+func (e *ModuleLoadError) Unwrap() error {
+	return e.Original
 }

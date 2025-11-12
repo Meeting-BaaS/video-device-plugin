@@ -27,10 +27,14 @@ IMAGE_NAME="video-device-plugin"
 IMAGE_TAG="1.0.0"
 FULL_IMAGE_NAME="${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 
-echo "Building Docker image: $FULL_IMAGE_NAME"
+# Kernel version for module compilation (default if not set)
+KERNEL_VERSION="${KERNEL_VERSION:-6.8.0-85-generic}"
 
-# Build the image
-docker build --tag "$FULL_IMAGE_NAME" .
+echo "Building Docker image: $FULL_IMAGE_NAME"
+echo "Using kernel version: $KERNEL_VERSION"
+
+# Build the image with kernel version build arg
+docker build --build-arg KERNEL_VERSION="$KERNEL_VERSION" --tag "$FULL_IMAGE_NAME" .
 
 echo "Docker image built successfully"
 

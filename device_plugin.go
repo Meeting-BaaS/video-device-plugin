@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -214,10 +216,20 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 		})
 	}
 
-	p.logger.Info("Found video devices",
-		"device_count", len(devices),
-		"healthy_count", healthyCount,
-		"unhealthy_count", len(devices)-healthyCount)
+	// Log device status with fallback mode information
+	if p.v4l2Manager.IsFallbackMode() {
+		p.logger.Warn("Found video devices (FALLBACK MODE)",
+			"device_count", len(devices),
+			"healthy_count", healthyCount,
+			"unhealthy_count", len(devices)-healthyCount,
+			"fallback_reason", p.v4l2Manager.GetFallbackReason(),
+			"note", "Devices are dummy paths - applications should handle gracefully")
+	} else {
+		p.logger.Info("Found video devices",
+			"device_count", len(devices),
+			"healthy_count", healthyCount,
+			"unhealthy_count", len(devices)-healthyCount)
+	}
 
 	// Send initial device list
 	response := &pluginapi.ListAndWatchResponse{
@@ -237,7 +249,9 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 			p.logger.Debug("ListAndWatch stopping")
 			return nil
 		case <-ticker.C:
-			// Periodic health check - send updated device list with per-device health status
+			// Periodic health check
+
+			// Send updated device list with per-device health status
 			allDevices := p.v4l2Manager.ListAllDevices()
 
 			var devices []*pluginapi.Device
@@ -260,10 +274,19 @@ func (p *VideoDevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.
 				})
 			}
 
-			p.logger.Debug("Health check completed",
-				"device_count", len(devices),
-				"healthy_count", healthyCount,
-				"unhealthy_count", len(devices)-healthyCount)
+			// Log health check with fallback mode information
+			if p.v4l2Manager.IsFallbackMode() {
+				p.logger.Debug("Health check completed (FALLBACK MODE)",
+					"device_count", len(devices),
+					"healthy_count", healthyCount,
+					"unhealthy_count", len(devices)-healthyCount,
+					"fallback_reason", p.v4l2Manager.GetFallbackReason())
+			} else {
+				p.logger.Debug("Health check completed",
+					"device_count", len(devices),
+					"healthy_count", healthyCount,
+					"unhealthy_count", len(devices)-healthyCount)
+			}
 
 			response := &pluginapi.ListAndWatchResponse{
 				Devices: devices,
@@ -310,9 +333,94 @@ func (p *VideoDevicePlugin) GetDevicePluginOptions(ctx context.Context, req *plu
 	p.logger.Debug("GetDevicePluginOptions called")
 
 	return &pluginapi.DevicePluginOptions{
-		PreStartRequired:                false,
+		PreStartRequired:                true,
 		GetPreferredAllocationAvailable: false,
 	}, nil
+}
+
+// PreStartContainer implements the PreStartContainer gRPC method
+func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginapi.PreStartContainerRequest) (*pluginapi.PreStartContainerResponse, error) {
+	p.logger.Info("PreStartContainer called", "devices", req.DevicesIDs)
+
+	// Skip device reset in fallback mode
+	if p.v4l2Manager.IsFallbackMode() {
+		p.logger.Warn("PreStartContainer called in FALLBACK MODE - skipping device reset",
+			"devices", req.DevicesIDs,
+			"fallback_reason", p.v4l2Manager.GetFallbackReason(),
+			"note", "Devices are dummy paths - no actual reset needed")
+		return &pluginapi.PreStartContainerResponse{}, nil
+	}
+
+	// Always reset devices to ensure they are fresh
+	for _, deviceID := range req.DevicesIDs {
+		device, err := p.v4l2Manager.GetDeviceByID(deviceID)
+		if err != nil {
+			p.logger.Warn("Failed to get device info", "device_id", deviceID, "error", err)
+			continue
+		}
+
+		p.logger.Info("Resetting device", "device_id", deviceID, "device_path", device.Path)
+
+		// Bound each reset by DeviceCreationTimeout to avoid hangs
+		resetCtx, cancel := context.WithTimeout(ctx, time.Duration(p.config.DeviceCreationTimeout)*time.Second)
+
+		// Reset the device using v4l2loopback-ctl with timeout
+		err = p.resetDeviceWithContext(resetCtx, device.Path)
+		cancel() // Release context immediately after reset operation
+
+		if err != nil {
+			p.logger.Error("Failed to reset device", "device_id", deviceID, "device_path", device.Path, "error", err)
+			return nil, fmt.Errorf("failed to reset device %s: %w", deviceID, err)
+		}
+
+		p.logger.Info("Device reset successfully", "device_id", deviceID, "device_path", device.Path)
+	}
+
+	return &pluginapi.PreStartContainerResponse{}, nil
+}
+
+// resetDeviceWithContext resets a v4l2loopback device by deleting and recreating it
+// The context is used to enforce a timeout on the external command execution
+func (p *VideoDevicePlugin) resetDeviceWithContext(ctx context.Context, devicePath string) error {
+	p.logger.Debug("Resetting device", "device_path", devicePath)
+
+	// Delete the device
+	deleteCmd := exec.CommandContext(ctx, "v4l2loopback-ctl", "delete", devicePath)
+	if out, err := deleteCmd.CombinedOutput(); err != nil {
+		// Check if the error is due to timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			p.logger.Error("Device delete operation timed out", "device_path", devicePath, "timeout_seconds", p.config.DeviceCreationTimeout)
+			return fmt.Errorf("device delete timed out after %d seconds: %w", p.config.DeviceCreationTimeout, ctx.Err())
+		}
+		p.logger.Debug("Failed to delete device (may not exist)", "device_path", devicePath, "error", err, "output", strings.TrimSpace(string(out)))
+	} else {
+		p.logger.Debug("Device deleted successfully", "device_path", devicePath)
+	}
+
+	// Check if context was cancelled before proceeding with recreation
+	if ctx.Err() != nil {
+		return fmt.Errorf("context cancelled during device reset: %w", ctx.Err())
+	}
+
+	// Recreate the device with same configuration
+	addCmd := exec.CommandContext(ctx, "v4l2loopback-ctl", "add",
+		"-n", p.config.V4L2CardLabel,
+		"-b", fmt.Sprintf("%d", p.config.V4L2MaxBuffers),
+		"-x", fmt.Sprintf("%d", p.config.V4L2ExclusiveCaps),
+		devicePath)
+
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		// Check if the error is due to timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			p.logger.Error("Device recreate operation timed out", "device_path", devicePath, "timeout_seconds", p.config.DeviceCreationTimeout)
+			return fmt.Errorf("device recreate timed out after %d seconds: %w", p.config.DeviceCreationTimeout, ctx.Err())
+		}
+		p.logger.Error("Failed to recreate device", "device_path", devicePath, "error", err, "output", strings.TrimSpace(string(out)))
+		return fmt.Errorf("failed to recreate device %s: %w", devicePath, err)
+	}
+
+	p.logger.Debug("Device recreated successfully", "device_path", devicePath)
+	return nil
 }
 
 // Note: GetPreferredAllocation and PreStartContainer are handled by the embedded
@@ -352,11 +460,22 @@ func (p *VideoDevicePlugin) allocateContainer(req *pluginapi.ContainerAllocateRe
 		},
 	}
 
-	p.logger.Info("Allocated device",
-		"device_id", device.ID,
-		"host_path", device.Path,
-		"container_path", device.Path,
-		"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
+	// Log device allocation with fallback mode information
+	if p.v4l2Manager.IsFallbackMode() {
+		p.logger.Warn("Allocated device (FALLBACK MODE)",
+			"device_id", device.ID,
+			"host_path", device.Path,
+			"container_path", device.Path,
+			"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path),
+			"fallback_reason", p.v4l2Manager.GetFallbackReason(),
+			"note", "This is a dummy device path - application should handle gracefully")
+	} else {
+		p.logger.Info("Allocated device",
+			"device_id", device.ID,
+			"host_path", device.Path,
+			"container_path", device.Path,
+			"env_var", fmt.Sprintf("VIDEO_DEVICE=%s", device.Path))
+	}
 
 	response := &pluginapi.ContainerAllocateResponse{
 		Devices: devices,
@@ -436,4 +555,3 @@ func (p *VideoDevicePlugin) monitorKubeletRestart() {
 		// label target for goto to resume outer loop
 	}
 }
-
