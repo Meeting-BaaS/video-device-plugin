@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 // v4l2Manager implements the V4L2Manager interface
@@ -56,7 +60,8 @@ func (v *v4l2Manager) EnableFallbackMode(reason string, count int) error {
 			v.logger.Error("Failed to create fallback device file",
 				"device_path", devicePath,
 				"error", err)
-			// Continue with other devices even if one fails
+			// Skip registration if file creation failed to avoid non-existent paths
+			continue
 		}
 
 		device := &VideoDevice{
@@ -79,20 +84,40 @@ func (v *v4l2Manager) EnableFallbackMode(reason string, count int) error {
 }
 
 // createFallbackDeviceFile creates a device file that can be mounted by Kubernetes
+// This function is secure against TOCTOU attacks by:
+// 1. Ensuring parent directory exists
+// 2. Removing any pre-existing path (including symlinks) before creation
+// 3. Using O_NOFOLLOW when creating regular files to avoid following symlinks
+// 4. Not calling chmod on symlinks (which would affect the target)
 func (v *v4l2Manager) createFallbackDeviceFile(devicePath string) error {
-	// Create a symbolic link to /dev/null so the file exists and can be mounted
-	// This is safe because /dev/null always exists and is readable/writable
-	if err := os.Symlink("/dev/null", devicePath); err != nil {
-		// If symlink fails, try creating a regular file
-		file, err := os.Create(devicePath)
-		if err != nil {
-			return fmt.Errorf("failed to create fallback device file: %w", err)
-		}
-		file.Close()
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(devicePath), 0o755); err != nil {
+		return fmt.Errorf("ensure fallback dir: %w", err)
 	}
 
-	// Set appropriate permissions
-	return os.Chmod(devicePath, v.perm)
+	// Remove any pre-existing path to avoid following attacker-controlled symlinks
+	// Use Lstat to detect symlinks without following them
+	if _, err := os.Lstat(devicePath); err == nil {
+		if err := os.Remove(devicePath); err != nil {
+			return fmt.Errorf("remove pre-existing path: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat existing path: %w", err)
+	}
+
+	// Prefer a symlink to /dev/null (no chmod on symlinks - chmod on symlinks affects the target)
+	if err := os.Symlink("/dev/null", devicePath); err == nil {
+		return nil
+	}
+
+	// Fallback: create a regular file safely without following symlinks
+	// Use O_NOFOLLOW to prevent following symlinks if one was created between Remove and Open
+	fd, err := unix.Open(devicePath, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_NOFOLLOW, uint32(v.perm))
+	if err != nil {
+		return fmt.Errorf("create regular fallback file: %w", err)
+	}
+	_ = unix.Close(fd)
+	return nil
 }
 
 // CreateDevices discovers and registers the specified number of video devices
@@ -301,6 +326,14 @@ func (v *v4l2Manager) CleanupFallbackDevices() {
 	v.logger.Info("Cleaning up fallback device files")
 
 	for _, device := range v.devices {
+		// Only remove paths that start with the fallback prefix to avoid accidental deletions
+		if !strings.HasPrefix(device.Path, v.fallbackPrefix) {
+			v.logger.Debug("Skipping non-fallback device path during cleanup",
+				"device_path", device.Path,
+				"fallback_prefix", v.fallbackPrefix)
+			continue
+		}
+
 		if err := os.Remove(device.Path); err != nil {
 			v.logger.Warn("Failed to remove fallback device file",
 				"device_path", device.Path,

@@ -30,34 +30,47 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install runtime dependencies
+# Build the module in-image for the target kernel version (parameterized via ARG)
+ARG KERNEL_VERSION=6.8.0-85-generic
 RUN apt-get update && \
     apt-get upgrade --yes && \
     apt-get --allow-downgrades --no-install-recommends --yes install \
     kmod \
-    linux-modules-extra-6.8.0-85-generic \
-    linux-headers-6.8.0-85-generic \
+    linux-modules-extra-${KERNEL_VERSION} \
+    linux-headers-${KERNEL_VERSION} \
     v4l-utils \
     zstd \
     ca-certificates \
-    dkms \
     build-essential \
-    git \
     wget \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # Install latest v4l2loopback from source (version 0.15.1)
-RUN cd /tmp && \
-    wget https://github.com/umlaeute/v4l2loopback/archive/refs/tags/v0.15.1.tar.gz && \
+# Build the module against the target kernel version specified in KERNEL_VERSION
+WORKDIR /tmp
+RUN wget -nv https://github.com/umlaeute/v4l2loopback/archive/refs/tags/v0.15.1.tar.gz && \
     tar -xzf v0.15.1.tar.gz && \
     cd v4l2loopback-0.15.1 && \
-    make all && \
-    make install && \
+    # Build and install userland utility (v4l2loopback-ctl)
     make install-utils && \
-    # Remove old module to ensure new version is loaded (hardcoded kernel version for build env)
-    rm -f /lib/modules/6.8.0-85-generic/kernel/v4l2loopback/v4l2loopback.ko.zst && \
+    # Build the kernel module against the target kernel version (not build host kernel)
+    make all KERNELDIR=/lib/modules/${KERNEL_VERSION}/build && \
+    make install && \
+    # Remove any older module variants for this kernel (robust cleanup)
+    find /lib/modules/${KERNEL_VERSION} -type f -name 'v4l2loopback.ko*' ! -path "*/updates/v4l2loopback.ko" -delete || true && \
     cd / && \
     rm -rf /tmp/v4l2loopback-0.15.1 /tmp/v0.15.1.tar.gz
+
+# Remove build-only tools after installation
+RUN apt-get purge --yes wget build-essential && \
+    apt-get autoremove --yes && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+# Note: The module is built for the kernel version specified in KERNEL_VERSION ARG.
+# Ensure all nodes in your cluster run this kernel version, or rebuild the image
+# with a different KERNEL_VERSION ARG for different kernel versions.
 
 
 # Copy Go binary from builder stage

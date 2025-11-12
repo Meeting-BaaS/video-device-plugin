@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -53,17 +54,29 @@ func main() {
 	displaySystemInfo(logger)
 
 	// Initialize V4L2 manager with fallback support
-	v4l2Manager := NewV4L2Manager(logger, config.V4L2DevicePerm, config.FallbackDevicePrefix)
+	// Ensure fallback prefix is safe (absolute path under /dev/)
+	fallbackPrefix := config.FallbackDevicePrefix
+	if fallbackPrefix == "" || !strings.HasPrefix(fallbackPrefix, "/dev/") {
+		fallbackPrefix = "/dev/dummy-video"
+		if config.FallbackDevicePrefix != "" {
+			logger.Warn("Invalid fallback device prefix, using default",
+				"provided", config.FallbackDevicePrefix,
+				"default", fallbackPrefix)
+		} else {
+			logger.Info("Using default fallback device prefix", "fallback_prefix", fallbackPrefix)
+		}
+	}
+	v4l2Manager := NewV4L2Manager(logger, config.V4L2DevicePerm, fallbackPrefix)
 
 	// Try to load v4l2loopback module
 	if err := loadV4L2LoopbackModule(config, logger); err != nil {
 		// Check if this is a module load error that supports fallback
 		var moduleErr *ModuleLoadError
-		if errors.As(err, &moduleErr) && moduleErr.CanFallback {
+		if errors.As(err, &moduleErr) && moduleErr.CanFallback && config.EnableFallbackMode {
 			logger.Warn("Kernel module loading failed, enabling fallback mode",
 				"module", moduleErr.Module,
 				"reason", moduleErr.Reason,
-				"original_error", moduleErr.Original)
+				"original_error", moduleErr.OriginalErrorMessage)
 
 			// Enable fallback mode with the structured error information
 			if fallbackErr := v4l2Manager.EnableFallbackMode(moduleErr.Reason, config.MaxDevices); fallbackErr != nil {
@@ -77,9 +90,18 @@ func main() {
 			logger.Warn("Video device plugin running in fallback mode",
 				"reason", moduleErr.Reason,
 				"dummy_devices", config.MaxDevices,
-				"fallback_prefix", config.FallbackDevicePrefix)
+				"fallback_prefix", fallbackPrefix)
 		} else {
-			logger.Error("Failed to load v4l2loopback module and fallback is disabled", "error", err)
+			// Determine the appropriate error message
+			if errors.As(err, &moduleErr) && moduleErr.CanFallback && !config.EnableFallbackMode {
+				logger.Error("Failed to load v4l2loopback module; fallback disabled by config",
+					"module", moduleErr.Module,
+					"reason", moduleErr.Reason,
+					"error", err,
+					"note", "Set ENABLE_FALLBACK_MODE=true to enable fallback mode")
+			} else {
+				logger.Error("Failed to load v4l2loopback module", "error", err)
+			}
 			os.Exit(1)
 		}
 	} else {

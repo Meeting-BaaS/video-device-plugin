@@ -361,8 +361,12 @@ func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginap
 
 		p.logger.Info("Resetting device", "device_id", deviceID, "device_path", device.Path)
 
-		// Reset the device using v4l2loopback-ctl
-		if err := p.resetDevice(device.Path); err != nil {
+		// Bound each reset by DeviceCreationTimeout to avoid hangs
+		resetCtx, cancel := context.WithTimeout(ctx, time.Duration(p.config.DeviceCreationTimeout)*time.Second)
+		defer cancel()
+
+		// Reset the device using v4l2loopback-ctl with timeout
+		if err := p.resetDeviceWithContext(resetCtx, device.Path); err != nil {
 			p.logger.Error("Failed to reset device", "device_id", deviceID, "device_path", device.Path, "error", err)
 			return nil, fmt.Errorf("failed to reset device %s: %w", deviceID, err)
 		}
@@ -373,26 +377,42 @@ func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginap
 	return &pluginapi.PreStartContainerResponse{}, nil
 }
 
-// resetDevice resets a v4l2loopback device by deleting and recreating it
-func (p *VideoDevicePlugin) resetDevice(devicePath string) error {
+// resetDeviceWithContext resets a v4l2loopback device by deleting and recreating it
+// The context is used to enforce a timeout on the external command execution
+func (p *VideoDevicePlugin) resetDeviceWithContext(ctx context.Context, devicePath string) error {
 	p.logger.Debug("Resetting device", "device_path", devicePath)
 
 	// Delete the device
-	deleteCmd := exec.Command("v4l2loopback-ctl", "delete", devicePath)
+	deleteCmd := exec.CommandContext(ctx, "v4l2loopback-ctl", "delete", devicePath)
 	if out, err := deleteCmd.CombinedOutput(); err != nil {
+		// Check if the error is due to timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			p.logger.Error("Device delete operation timed out", "device_path", devicePath, "timeout_seconds", p.config.DeviceCreationTimeout)
+			return fmt.Errorf("device delete timed out after %d seconds: %w", p.config.DeviceCreationTimeout, ctx.Err())
+		}
 		p.logger.Debug("Failed to delete device (may not exist)", "device_path", devicePath, "error", err, "output", strings.TrimSpace(string(out)))
 	} else {
 		p.logger.Debug("Device deleted successfully", "device_path", devicePath)
 	}
 
+	// Check if context was cancelled before proceeding with recreation
+	if ctx.Err() != nil {
+		return fmt.Errorf("context cancelled during device reset: %w", ctx.Err())
+	}
+
 	// Recreate the device with same configuration
-	addCmd := exec.Command("v4l2loopback-ctl", "add",
+	addCmd := exec.CommandContext(ctx, "v4l2loopback-ctl", "add",
 		"-n", p.config.V4L2CardLabel,
 		"-b", fmt.Sprintf("%d", p.config.V4L2MaxBuffers),
 		"-x", fmt.Sprintf("%d", p.config.V4L2ExclusiveCaps),
 		devicePath)
 
 	if out, err := addCmd.CombinedOutput(); err != nil {
+		// Check if the error is due to timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			p.logger.Error("Device recreate operation timed out", "device_path", devicePath, "timeout_seconds", p.config.DeviceCreationTimeout)
+			return fmt.Errorf("device recreate timed out after %d seconds: %w", p.config.DeviceCreationTimeout, ctx.Err())
+		}
 		p.logger.Error("Failed to recreate device", "device_path", devicePath, "error", err, "output", strings.TrimSpace(string(out)))
 		return fmt.Errorf("failed to recreate device %s: %w", devicePath, err)
 	}

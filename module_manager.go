@@ -46,10 +46,11 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 
 		// Create a structured error that can be handled by the caller
 		return &ModuleLoadError{
-			Module:      "videodev",
-			Reason:      "module not found - kernel headers mismatch",
-			Original:    err,
-			CanFallback: config.EnableFallbackMode,
+			Module:               "videodev",
+			Reason:               "module not found - kernel headers mismatch",
+			Original:             err,
+			OriginalErrorMessage: err.Error(),
+			CanFallback:          config.EnableFallbackMode,
 		}
 	}
 
@@ -75,19 +76,55 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		exclusiveCaps[i] = fmt.Sprintf("%d", config.V4L2ExclusiveCaps)
 	}
 
-	// Create context with timeout for modprobe command
+	// Create context with timeout for insmod command
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.DeviceCreationTimeout)*time.Second)
 	defer cancel()
 
-	// Load v4l2loopback using insmod to ensure we get the newer version from /updates/
+	// Load v4l2loopback using insmod to ensure we get the newer version with device control features
 	// Get kernel version for the module path
-	kernelVersion, err := exec.Command("uname", "-r").Output()
+	kernelVersionBytes, err := exec.Command("uname", "-r").Output()
 	if err != nil {
 		logger.Error("Failed to get kernel version", "error", err)
-		return fmt.Errorf("failed to get kernel version: %w", err)
+		return &ModuleLoadError{
+			Module:               "v4l2loopback",
+			Reason:               "kernel version detection failed",
+			Original:             err,
+			OriginalErrorMessage: err.Error(),
+			CanFallback:          config.EnableFallbackMode,
+		}
 	}
 
-	modulePath := fmt.Sprintf("/lib/modules/%s/updates/v4l2loopback.ko", strings.TrimSpace(string(kernelVersion)))
+	kv := strings.TrimSpace(string(kernelVersionBytes))
+	// Search common module paths (order matters - check most likely first)
+	candidates := []string{
+		fmt.Sprintf("/lib/modules/%s/updates/v4l2loopback.ko", kv),              // Most common: built from source
+		fmt.Sprintf("/lib/modules/%s/updates/dkms/v4l2loopback.ko", kv),         // DKMS installation
+		fmt.Sprintf("/lib/modules/%s/extra/v4l2loopback.ko", kv),                // Extra modules
+		fmt.Sprintf("/lib/modules/%s/kernel/drivers/media/v4l2loopback.ko", kv), // Kernel tree location
+	}
+
+	var modulePath string
+	for _, candidate := range candidates {
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			modulePath = candidate
+			logger.Info("Found v4l2loopback module", "path", modulePath, "kernel_version", kv)
+			break
+		}
+	}
+
+	if modulePath == "" {
+		logger.Error("v4l2loopback module not found in any expected location",
+			"kernel_version", kv,
+			"searched_paths", candidates)
+		return &ModuleLoadError{
+			Module:               "v4l2loopback",
+			Reason:               "module file not found in expected locations",
+			Original:             fmt.Errorf("searched paths: %v", candidates),
+			OriginalErrorMessage: fmt.Sprintf("module not found in any of: %v", candidates),
+			CanFallback:          config.EnableFallbackMode,
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, "insmod", modulePath,
 		fmt.Sprintf("video_nr=%s", strings.Join(videoNumbers, ",")),
 		fmt.Sprintf("max_buffers=%d", config.V4L2MaxBuffers),
@@ -102,10 +139,11 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 				"timeout_seconds", config.DeviceCreationTimeout)
 
 			return &ModuleLoadError{
-				Module:      "v4l2loopback",
-				Reason:      "module loading timeout",
-				Original:    err,
-				CanFallback: config.EnableFallbackMode,
+				Module:               "v4l2loopback",
+				Reason:               "module loading timeout",
+				Original:             err,
+				OriginalErrorMessage: err.Error(),
+				CanFallback:          config.EnableFallbackMode,
 			}
 		}
 
@@ -126,10 +164,11 @@ func loadV4L2LoopbackModule(config *DevicePluginConfig, logger *slog.Logger) err
 		}
 
 		return &ModuleLoadError{
-			Module:      "v4l2loopback",
-			Reason:      "module loading failed",
-			Original:    err,
-			CanFallback: config.EnableFallbackMode,
+			Module:               "v4l2loopback",
+			Reason:               "module loading failed",
+			Original:             err,
+			OriginalErrorMessage: err.Error(),
+			CanFallback:          config.EnableFallbackMode,
 		}
 	}
 

@@ -110,10 +110,11 @@ type HealthCheck struct {
 
 // ModuleLoadError represents an error that occurred during kernel module loading
 type ModuleLoadError struct {
-	Module      string `json:"module"`
-	Reason      string `json:"reason"`
-	Original    error  `json:"original_error"`
-	CanFallback bool   `json:"can_fallback"`
+	Module               string `json:"module"`
+	Reason               string `json:"reason"`
+	Original             error  `json:"-"`                                // Omit from JSON to avoid serialization issues and potential leaks
+	OriginalErrorMessage string `json:"original_error_message,omitempty"` // String representation for JSON logging
+	CanFallback          bool   `json:"can_fallback"`
 }
 
 func (e *ModuleLoadError) Error() string {
