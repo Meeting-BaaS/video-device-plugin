@@ -363,10 +363,12 @@ func (p *VideoDevicePlugin) PreStartContainer(ctx context.Context, req *pluginap
 
 		// Bound each reset by DeviceCreationTimeout to avoid hangs
 		resetCtx, cancel := context.WithTimeout(ctx, time.Duration(p.config.DeviceCreationTimeout)*time.Second)
-		defer cancel()
 
 		// Reset the device using v4l2loopback-ctl with timeout
-		if err := p.resetDeviceWithContext(resetCtx, device.Path); err != nil {
+		err = p.resetDeviceWithContext(resetCtx, device.Path)
+		cancel() // Release context immediately after reset operation
+
+		if err != nil {
 			p.logger.Error("Failed to reset device", "device_id", deviceID, "device_path", device.Path, "error", err)
 			return nil, fmt.Errorf("failed to reset device %s: %w", deviceID, err)
 		}

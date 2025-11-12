@@ -56,9 +56,9 @@ RUN wget -nv https://github.com/umlaeute/v4l2loopback/archive/refs/tags/v0.15.1.
     make install-utils && \
     # Build the kernel module against the target kernel version (not build host kernel)
     make all KERNELDIR=/lib/modules/${KERNEL_VERSION}/build && \
+    # Remove stale copies before installing the new module (prevents deleting what we just install)
+    find /lib/modules/${KERNEL_VERSION} -type f -name 'v4l2loopback.ko*' -delete || true && \
     make install && \
-    # Remove any older module variants for this kernel (robust cleanup)
-    find /lib/modules/${KERNEL_VERSION} -type f -name 'v4l2loopback.ko*' ! -path "*/updates/v4l2loopback.ko" -delete || true && \
     cd / && \
     rm -rf /tmp/v4l2loopback-0.15.1 /tmp/v0.15.1.tar.gz
 
