@@ -28,7 +28,7 @@ IMAGE_TAG="1.0.0"
 FULL_IMAGE_NAME="${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 # Kernel version for module compilation (default if not set)
-KERNEL_VERSION="${KERNEL_VERSION:-6.8.0-85-generic}"
+KERNEL_VERSION="${KERNEL_VERSION:-6.8.0-90-generic}"
 
 echo "Building Docker image: $FULL_IMAGE_NAME"
 echo "Using kernel version: $KERNEL_VERSION"

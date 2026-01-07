@@ -31,7 +31,7 @@ ENV TZ=UTC
 
 # Install runtime dependencies
 # Build the module in-image for the target kernel version (parameterized via ARG)
-ARG KERNEL_VERSION=6.8.0-85-generic
+ARG KERNEL_VERSION=6.8.0-90-generic
 RUN apt-get update && \
     apt-get upgrade --yes && \
     apt-get --allow-downgrades --no-install-recommends --yes install \

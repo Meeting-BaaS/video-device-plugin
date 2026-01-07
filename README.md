@@ -196,7 +196,7 @@ for _, device := range allDevices {
 ### System Requirements
 
 - **Operating System**: Ubuntu 24.04 LTS
-- **Kernel Version**: 6.8.0-85-generic
+- **Kernel Version**: 6.8.0-90-generic
 - **Kubernetes**: 1.33.4
 - **Container Runtime**: Docker/container with privileged mode support
 
@@ -212,17 +212,17 @@ lsmod | grep v4l2loopback
 
 # Install if missing
 sudo apt-get update
-sudo apt-get install linux-modules-extra-6.8.0-85-generic
+sudo apt-get install linux-modules-extra-6.8.0-90-generic
 sudo apt-get install v4l2loopback-dkms v4l2loopback-utils
 ```
 
-**Note**: This plugin automatically installs and uses v4l2loopback v0.15.1 (latest version) from source during the Docker build process. The module is compiled for the target kernel version specified via the `KERNEL_VERSION` build argument (default: `6.8.0-85-generic`). The older Ubuntu package version (0.6) is replaced to ensure compatibility with dynamic device management features.
+**Note**: This plugin automatically installs and uses v4l2loopback v0.15.1 (latest version) from source during the Docker build process. The module is compiled for the target kernel version specified via the `KERNEL_VERSION` build argument (default: `6.8.0-90-generic`). The older Ubuntu package version (0.6) is replaced to ensure compatibility with dynamic device management features.
 
 **Kernel Version Configuration**: The Dockerfile uses a parameterized `KERNEL_VERSION` build argument. You can specify the kernel version when building:
 
 - Via build script: Set `KERNEL_VERSION` in your `.env` file
 - Via docker build: Use `--build-arg KERNEL_VERSION=<version>`
-- Default: `6.8.0-85-generic` if not specified
+- Default: `6.8.0-90-generic` if not specified
 
 ### Kubernetes Requirements
 
@@ -299,7 +299,7 @@ The `V4L2_DEVICE_PERM` setting controls file permissions for video devices:
 ### 1. Build the Docker Image
 
 ```bash
-# Build the image with default kernel version (6.8.0-85-generic)
+# Build the image with default kernel version (6.8.0-90-generic)
 docker build -t video-device-plugin:latest .
 
 # Build for a specific kernel version

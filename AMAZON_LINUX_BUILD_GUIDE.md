@@ -12,7 +12,7 @@ The default Dockerfile is configured for Ubuntu 24.04. To build for Amazon Linux
 | -------------------------- | ------------------------------- | ------------------------------------------------- |
 | **Base Image**             | `ubuntu:24.04`                  | `amazonlinux:2023`                                |
 | **Package Manager**        | `apt-get`                       | `yum` / `dnf`                                     |
-| **Kernel Version**         | `6.8.0-85-generic`              | `6.1.141-155.222.amzn2023.x86_64`                 |
+| **Kernel Version**         | `6.8.0-90-generic`              | `6.1.141-155.222.amzn2023.x86_64`                 |
 | **Kernel Headers Package** | `linux-headers-<version>`       | `kernel-devel-<version>`                          |
 | **Kernel Modules Package** | `linux-modules-extra-<version>` | `kernel-modules-extra` (if available) or built-in |
 | **Build Tools**            | `build-essential`               | `gcc make kernel-devel`                           |
@@ -57,7 +57,7 @@ RUN yum update -y && \
 
 ```dockerfile
 # Current
-ARG KERNEL_VERSION=6.8.0-85-generic
+ARG KERNEL_VERSION=6.8.0-90-generic
 
 # Amazon Linux 2023
 ARG KERNEL_VERSION=6.1.141-155.222.amzn2023.x86_64
